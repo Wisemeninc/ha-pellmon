@@ -1,0 +1,29 @@
+# Per-client topic ACL for ha-pellmon. Copy to mosquitto/acl.
+# Least privilege: the compromise of one credential must not grant more
+# than that client's role.
+#
+# If you use the Home Assistant mosquitto add-on instead of the bundled
+# broker, replicate these rules in its "customize" ACL configuration.
+
+# ── The bridge (inside the pellmon container) ──
+# Publishes states + discovery, reads commands. It must NOT be able to
+# publish commands to itself (write pellmon/set/# is absent on purpose).
+user pellmon-bridge
+topic write pellmon/#
+topic read  pellmon/set/#
+topic write pellmon/set/+/result
+topic write pellmon/bridge/availability
+topic write homeassistant/sensor/+/config
+topic write homeassistant/number/+/config
+topic write homeassistant/select/+/config
+topic write homeassistant/button/+/config
+topic read  homeassistant/status
+
+# ── Home Assistant ──
+# Reads states + discovery, writes commands ONLY under pellmon/set/.
+user homeassistant
+topic read  pellmon/#
+topic write pellmon/set/#
+topic readwrite homeassistant/#
+
+# No other user has any access to pellmon/# — do not add pattern rules.

@@ -1,0 +1,25 @@
+# Hardened mosquitto configuration for ha-pellmon.
+# Copy to mosquitto/mosquitto.conf. Requires ./certs (see README) and a
+# password file (mosquitto_passwd -c mosquitto/passwd pellmon-bridge).
+
+per_listener_settings false
+allow_anonymous false
+password_file /mosquitto/config/passwd
+acl_file /mosquitto/config/acl
+
+persistence true
+persistence_location /mosquitto/data/
+
+# TLS-only listener. No plaintext listener is configured on purpose.
+listener 8883
+cafile /mosquitto/certs/ca.crt
+certfile /mosquitto/certs/server.crt
+keyfile /mosquitto/certs/server.key
+tls_version tlsv1.2
+
+# Uncomment to require client certificates (mutual TLS):
+#require_certificate true
+
+log_dest stdout
+log_type warning
+log_type notice

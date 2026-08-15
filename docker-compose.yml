@@ -1,0 +1,67 @@
+# ha-pellmon — hardened deployment. Self-built image; no dependency on
+# lakelake/pellmondocker or any prebuilt image for the bridge.
+#
+# Security posture:
+#   - dedicated bridge network (NOT network_mode: host)
+#   - no published ports on the bridge (UDP to the furnace + MQTT are
+#     both outbound)
+#   - unprivileged user, all capabilities dropped, no privilege
+#     escalation, read-only root filesystem
+#   - secrets injected at runtime from .env (chmod 600), never baked in
+services:
+  bridge:
+    build: .
+    image: ha-pellmon:local
+    container_name: ha-pellmon
+    restart: unless-stopped
+    env_file: .env
+    networks: [pellmon]
+    volumes:
+      - ./bridge/bridge_config.yaml:/config/bridge_config.yaml:ro
+      # TLS material for the MQTT client (uncomment when MQTT_TLS=true):
+      # - ./certs/ca.crt:/config/certs/ca.crt:ro
+      # - ./certs/bridge.crt:/config/certs/bridge.crt:ro
+      # - ./certs/bridge.key:/config/certs/bridge.key:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 64
+    # NOTE: set NBE_ADDR to your controller's (DHCP-reserved) IP in .env.
+    # Broadcast discovery does not cross the docker bridge network; only
+    # use `network_mode: host` (and drop `networks:`) if you truly cannot
+    # pin the controller's address.
+
+  # Optional: dedicated hardened broker. Remove this service if you point
+  # MQTT_HOST at an existing broker (e.g. the Home Assistant mosquitto
+  # add-on) — but then apply mosquitto/acl.example there.
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22
+    container_name: pellmon-mosquitto
+    restart: unless-stopped
+    networks: [pellmon]
+    ports:
+      - "8883:8883"   # TLS only; no plaintext 1883 published
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl:/mosquitto/config/acl:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd
+      - ./certs:/mosquitto/certs:ro
+      - mosquitto-data:/mosquitto/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+
+networks:
+  pellmon:
+    driver: bridge
+
+volumes:
+  mosquitto-data:

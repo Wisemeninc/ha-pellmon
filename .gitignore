@@ -1,0 +1,11 @@
+.env
+.venv/
+bridge/bridge_config.yaml
+mosquitto/passwd
+certs/
+*.key
+*.crt
+*.pem
+__pycache__/
+*.pyc
+.pytest_cache/

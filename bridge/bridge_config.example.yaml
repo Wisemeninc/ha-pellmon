@@ -1,0 +1,48 @@
+# ha-pellmon bridge configuration
+#
+# Copy to bridge_config.yaml (mounted read-only into the container at
+# /run/pellmon/bridge_config.yaml via docker-compose).
+#
+# SECRETS DO NOT BELONG IN THIS FILE. MQTT credentials and TLS material
+# come from the environment (.env): MQTT_HOST, MQTT_PORT, MQTT_USERNAME,
+# MQTT_PASSWORD, MQTT_TLS, MQTT_TLS_CA, MQTT_TLS_CERT, MQTT_TLS_KEY.
+
+# Base topic. States: pellmon/<item>   Commands: pellmon/set/<item>
+base_topic: pellmon
+discovery_prefix: homeassistant
+device_name: "PellMon Furnace"
+
+# Global write budget across all items.
+rate_limit:
+  max_writes: 10
+  window_s: 60
+
+# ── Write allowlist ─────────────────────────────────────────────────────
+# The bridge is READ-ONLY until you list items here. Nothing outside this
+# list can ever be written, even if the device reports it writable.
+#
+# Find your item names: start the bridge and read the startup log line
+#   "writable candidates for the allowlist: ..."
+# (it lists every R/W item your controller exposes, with device min/max).
+#
+# Per item you may set:
+#   min / max        - tighter bounds than the device's (tightest wins)
+#   options          - list of allowed values (select entity)
+#   press_payload    - exact payload for momentary/button items
+#   min_interval_s   - min seconds between accepted writes (default 2.0)
+#
+# Start small: enable the boiler setpoint only, verify, then grow.
+allowlist: {}
+
+# Example (item ids are <group>-<name>, e.g. boiler-temp; verify against
+# YOUR startup log — it also shows the controller's own min/max, and the
+# tightest of device and config bounds always wins):
+#
+# allowlist:
+#   boiler-temp:            # boiler temperature setpoint
+#     min: 60
+#     max: 75
+#     min_interval_s: 5
+#   hopper-content:         # set after refilling pellets
+#     min: 0
+#     max: 1000
