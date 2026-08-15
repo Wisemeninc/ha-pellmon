@@ -62,6 +62,14 @@ class TestProxy(unittest.TestCase):
         self.assertEqual(self.fake.writes, [("boiler.temp", "65")])
         self.assertEqual(self.proxy.get_setting("boiler", "temp"), "65")
 
+    def test_write_timeout_is_never_retried(self):
+        """A lost write response may still have landed — one attempt only."""
+        self.fake.drop_writes = 1
+        with self.assertRaises(NbeTimeout):
+            self.proxy.set_setting("boiler", "temp", "65")
+        time.sleep(0.3)
+        self.assertEqual(self.fake.write_attempts, 1)
+
     def test_rejected_write_raises(self):
         self.fake.reject_next_write = True
         with self.assertRaises(NbeRejected):
@@ -119,7 +127,7 @@ class TestGateway(unittest.TestCase):
         self.fake.stop()
         self.fake.join(timeout=2)
 
-    def _start_gateway(self, poll=0.2):
+    def _start_gateway(self, poll=0.2, allowlist=("boiler-temp",)):
         self.gw = NbeGateway(
             {
                 "serial": self.fake.serial,
@@ -128,6 +136,7 @@ class TestGateway(unittest.TestCase):
                 "port": self.fake.port,
                 "poll_interval_s": poll,
             },
+            allowlist=allowlist,
             on_online=lambda items, values: self.events.__setitem__(
                 "online", (items, values)
             ),
@@ -169,9 +178,17 @@ class TestGateway(unittest.TestCase):
         self.assertEqual(self.gw.read_item("boiler-temp"), "65")
 
     def test_set_readonly_item_refused(self):
-        self._start_gateway()
+        self._start_gateway(allowlist=("boiler-temp", "operating_data-boiler_temp"))
         with self.assertRaises(NbeError):
             self.gw.set_item("operating_data-boiler_temp", "65")
+
+    def test_gateway_gate_blocks_non_allowlisted_writable(self):
+        """Last-layer gate: device-writable but not allowlisted is refused
+        even if the MQTT-side validator were bypassed."""
+        self._start_gateway(allowlist=())
+        with self.assertRaises(NbeError):
+            self.gw.set_item("boiler-temp", "65")
+        self.assertEqual(self.fake.writes, [])
 
 
 if __name__ == "__main__":

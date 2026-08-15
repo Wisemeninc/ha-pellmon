@@ -116,6 +116,25 @@ HA UI can never sit on a value the furnace never accepted.
 - per-item minimum interval (default 2 s) + global budget (10/min)
 - equal-to-current values acknowledged without touching the furnace
 
+## Going live safely
+
+Tests prove the protocol implementation against a faithful fake — not
+your controller's firmware quirks. Stage the cut-over:
+
+1. **Read-only soak (24–48 h).** Run with the allowlist empty alongside
+   your old setup. Compare values in HA against the burner's own panel.
+2. **First write = most harmless parameter.** Allowlist one benign
+   setpoint (e.g. `boiler-temp` with tight bounds), change it by one
+   degree from HA, and confirm the change on the furnace panel and on
+   `pellmon/set/boiler-temp/result`.
+3. **Then hand over control** — grow the allowlist one item at a time.
+   Leave combustion-relevant parameters (feed/auger timing, oxygen,
+   power limits) OFF the allowlist: range validation stops typos, not
+   valid-but-wrong values in safety-relevant settings.
+
+Keep the old stack stopped-but-intact until the soak passes, as a
+rollback path.
+
 ## Migration from lakelake/pellmondocker
 
 | Old (`lakelake/pellmondocker`) | New (ha-pellmon) |

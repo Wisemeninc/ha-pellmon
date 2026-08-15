@@ -169,8 +169,10 @@ class Proxy:
         self._check_group(group)
         if not isinstance(value, str):
             raise NbeError("value must be str")
+        # retries=0: a timed-out write may still have landed on the
+        # controller — retrying could double-apply. Fail loudly instead.
         response = self._transact(
-            2, "%s.%s=%s" % (group, name, value), encrypt=True, timeout=5.0
+            2, "%s.%s=%s" % (group, name, value), encrypt=True, timeout=5.0, retries=0
         )
         if response.status != 0:
             raise NbeRejected(response.payload or "status %d" % response.status)
@@ -183,10 +185,12 @@ class Proxy:
         if group not in SETTINGS_GROUPS:
             raise NbeError("unknown settings group %r" % group)
 
-    def _transact(self, function, payload, encrypt=False, timeout=None):
+    def _transact(self, function, payload, encrypt=False, timeout=None, retries=None):
         with self._lock:
             last_error = None
-            for attempt in range(self._retries + 1):
+            if retries is None:
+                retries = self._retries
+            for attempt in range(retries + 1):
                 self.request.sequencenumber = (self.request.sequencenumber + 1) % 100
                 self.request.payload = payload
                 self.request.function = function

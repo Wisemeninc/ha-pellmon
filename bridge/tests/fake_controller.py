@@ -59,7 +59,9 @@ class FakeController(threading.Thread):
         self.operating = {"boiler_temp": "71.5", "state": "5"}
         self.advanced = {"oxygen": "12.1"}
         self.writes = []          # (path, value) accepted
+        self.write_attempts = 0   # function-2 frames received
         self.reject_next_write = False
+        self.drop_writes = 0      # swallow N write requests (no response)
 
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.s.bind(("127.0.0.1", 0))
@@ -126,6 +128,10 @@ class FakeController(threading.Thread):
             body = ";".join("%s=%s" % kv for kv in sorted(self.advanced.items()))
             return self._respond(appid, controllerid, 5, seq, 0, body)
         if function == 2:
+            self.write_attempts += 1
+            if self.drop_writes > 0:
+                self.drop_writes -= 1
+                return None
             if not encrypted:
                 return self._respond(appid, controllerid, 2, seq, 1, "not encrypted")
             if pincode != self.pincode:

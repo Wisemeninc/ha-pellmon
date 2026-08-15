@@ -131,6 +131,7 @@ class Bridge:
             on_online=self._controller_online,
             on_changed=self._controller_changed,
             on_offline=self._controller_offline,
+            allowlist=self.allowlist.keys(),
         )
 
         self.mq = mqtt.Client(

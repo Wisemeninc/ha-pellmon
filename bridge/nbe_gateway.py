@@ -30,11 +30,14 @@ class NbeGateway:
       on_offline()              - controller unreachable
     """
 
-    def __init__(self, config, on_online, on_changed, on_offline):
+    def __init__(self, config, on_online, on_changed, on_offline, allowlist=None):
         self._cfg = config
         self._on_online = on_online
         self._on_changed = on_changed
         self._on_offline = on_offline
+        # Independent last-layer write gate: even if the MQTT-side
+        # validator were bypassed, nothing outside this set is written.
+        self._allowlist = frozenset(allowlist or ())
         self._proxy = None
         self._online = False
         self.items = {}
@@ -65,6 +68,8 @@ class NbeGateway:
         proxy = self._proxy
         if proxy is None:
             raise NbeError("controller offline")
+        if item_id not in self._allowlist:
+            raise NbeError("%s is not in the write allowlist (gateway gate)" % item_id)
         meta = self.items.get(item_id)
         if meta is None or meta.get("type") != "R/W":
             raise NbeError("%s is not a writable settings item" % item_id)
