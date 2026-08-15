@@ -256,6 +256,8 @@ image build/run and on-site control test are [DEFERRED-VERIFY] follow-ups (see V
 - 2026-08-15: Forge round (GPT-5.3-codex via opencode): 1 critical, 4 high, 8 medium, 3 low. All implemented as ISC-86..93 except two judgment calls: (1) heartbeat semantics — Forge wanted controller-reachability, Cato wanted loop-liveness; kept the split design (heartbeat = process/loop liveness for the Docker healthcheck, availability topic = controller reachability for HA) because restarting a healthy container cannot revive an unreachable furnace; (2) discovery-uid separator collision (`boiler-temp` vs hypothetical `boiler_temp`) — accepted as a theoretical risk, no NBE group contains an underscore-ambiguous pairing; revisit if a collision ever appears in the startup log.
 - 2026-08-15: Suite at 46 passing; image rebuilt clean after each round. progress 90/90 active ISCs; live-furnace probe remains the single [DEFERRED-VERIFY].
 
+- 2026-08-15: Published to private remote `github.com/Wisemeninc/ha-pellmon` (visibility verified PRIVATE via gh; secret-hygiene check confirmed no .env/keys/certs/passwd tracked before push).
+
 ## Changelog
 
 - conjectured: keeping PellMon 0.7.0 as the device gateway was the lowest-risk path because re-implementing the NBE protocol risks the physical furnace link.
