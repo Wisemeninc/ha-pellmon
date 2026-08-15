@@ -123,6 +123,24 @@ class TestRangeValidation(unittest.TestCase):
         out = v.validate("boiler-temp", "warm")
         self.assertFalse(out.accepted)
 
+    def test_non_finite_floats_rejected(self):
+        """Audit finding: float('nan') passes range comparisons (NaN
+        comparisons are always False) then crashes normalization."""
+        v, _ = make_validator()
+        for evil in ("nan", "NaN", "inf", "-inf", "Infinity", "1e400", "1_0", "0x41"):
+            out = v.validate("boiler-temp", evil)
+            self.assertFalse(out.accepted, "accepted %r" % evil)
+
+    def test_frame_metacharacters_rejected(self):
+        """Audit finding: ';' and '=' would inject key=value pairs into
+        the NBE frame payload."""
+        v, _ = make_validator(
+            {"misc-mode": AllowedItem("misc-mode", options=["auto", "x=1", "a;b"])}
+        )
+        for evil in ("x=1", "a;b", "65;boiler.temp2", "a\nb"):
+            out = v.validate("misc-mode", evil)
+            self.assertFalse(out.accepted, "accepted %r" % evil)
+
 
 class TestEnum(unittest.TestCase):
     """ISC-20, ISC-58."""

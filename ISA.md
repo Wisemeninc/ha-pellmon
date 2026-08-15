@@ -3,8 +3,8 @@ project: ha-pellmon
 task: Upgrade PellMon furnace link to secure bidirectional Home Assistant integration
 slug: ha-pellmon-secure-control
 effort: E4
-phase: execute
-progress: 0/64
+phase: verify
+progress: 81/82
 mode: standard
 started: 2026-08-15T19:40:00-07:00
 updated: 2026-08-15T19:40:00-07:00
@@ -83,100 +83,113 @@ migration + security documentation — with validation logic AND the full protoc
 ## Criteria
 
 ### Repo & structure
-- [ ] ISC-1: `README.md` exists documenting architecture, setup, migration from lakelake/pellmondocker
-- [ ] ISC-2: `SECURITY.md` exists with STRIDE threat note covering the MQTT command path
-- [ ] ISC-3: Repo is a git repository with an initial commit and `.gitignore` covering `.env`, certs, `__pycache__`
-- [ ] ISC-4: `.env.example` documents every runtime secret/variable with no real values
-- [ ] ISC-5: `LICENSE` present (GPL-3.0)
+- [x] ISC-1: `README.md` exists documenting architecture, setup, migration from lakelake/pellmondocker
+- [x] ISC-2: `SECURITY.md` exists with STRIDE threat note covering the MQTT command path
+- [x] ISC-3: Repo is a git repository with an initial commit and `.gitignore` covering `.env`, certs, `__pycache__`
+- [x] ISC-4: `.env.example` documents every runtime secret/variable with no real values
+- [x] ISC-5: `LICENSE` present (GPL-3.0)
 
 ### Bridge — read path
-- [ ] ISC-6: `bridge/pellmon_ha_bridge.py` compiles under `python3 -m py_compile`
-- [ ] ISC-7: Bridge publishes every discovered controller item to `pellmon/<item>` with nbecom-compatible ids (`boiler-temp`, `operating_data-*`), retained
-- [ ] ISC-8: Gateway poll loop detects value changes and republishes them (refined: was D-Bus signal)
-- [ ] ISC-9: Bridge publishes availability (`online`/`offline`) on `pellmon/bridge/availability` with MQTT LWT
-- [ ] ISC-10: Bridge publishes HA MQTT Discovery configs under `homeassistant/<component>/.../config` for discovered items
-- [ ] ISC-11: Discovery maps item metadata: R→sensor, R/W numeric+allowlisted→number, enum→select, momentary W→button
-- [ ] ISC-12: All discovered entities share one HA device (identifiers, name, manufacturer)
-- [ ] ISC-13: Bridge re-publishes discovery + states when `homeassistant/status` announces `online` (HA restart)
+- [x] ISC-6: `bridge/pellmon_ha_bridge.py` compiles under `python3 -m py_compile`
+- [x] ISC-7: Bridge publishes every discovered controller item to `pellmon/<item>` with nbecom-compatible ids (`boiler-temp`, `operating_data-*`), retained
+- [x] ISC-8: Gateway poll loop detects value changes and republishes them (refined: was D-Bus signal)
+- [x] ISC-9: Bridge publishes availability (`online`/`offline`) on `pellmon/bridge/availability` with MQTT LWT
+- [x] ISC-10: Bridge publishes HA MQTT Discovery configs under `homeassistant/<component>/.../config` for discovered items
+- [x] ISC-11: Discovery maps item metadata: R→sensor, R/W numeric+allowlisted→number, enum→select, momentary W→button
+- [x] ISC-12: All discovered entities share one HA device (identifiers, name, manufacturer)
+- [x] ISC-13: Bridge re-publishes discovery + states when `homeassistant/status` announces `online` (HA restart)
 
 ### Bridge — control path (fail-closed)
-- [ ] ISC-14: Command subscription is ONLY `pellmon/set/<item>` for items present in the configured allowlist
-- [ ] ISC-15: Item not in allowlist → no subscription and any received command rejected + logged
-- [ ] ISC-16: Payload decoded as UTF-8 with strict error handling; undecodable payload rejected (fixes the bytes bug)
-- [ ] ISC-17: Payload length capped (≤32 chars); oversize rejected
-- [ ] ISC-18: Numeric commands validated against min/max from device metadata AND config override — the tighter bound wins
-- [ ] ISC-19: Out-of-range numeric command rejected, not clamped silently, with reason logged
-- [ ] ISC-20: Enum/select commands validated against the item's enum list; non-member rejected
-- [ ] ISC-21: Retained command messages are rejected (anti-replay on bridge/broker restart)
-- [ ] ISC-22: Per-item minimum write interval enforced (default ≥2 s); violations rejected
-- [ ] ISC-23: Global write rate limit enforced (default ≤10 writes/min); violations rejected
-- [ ] ISC-24: Every accepted and rejected command produces one structured audit log line (timestamp, item, payload, outcome, reason)
-- [ ] ISC-25: Every write result (or exception) published to `pellmon/set/<item>/result` — no swallowed exceptions
-- [ ] ISC-26: Controller writes take `str` values only, enforced in nbe/protocol.py (the py3 bytes defect cannot recur)
-- [ ] ISC-27: Validation logic lives in `bridge/validation.py` with no paho/gi imports (unit-testable in isolation)
+- [x] ISC-14: Command subscription is ONLY `pellmon/set/<item>` for items present in the configured allowlist
+- [x] ISC-15: Item not in allowlist → no subscription and any received command rejected + logged
+- [x] ISC-16: Payload decoded as UTF-8 with strict error handling; undecodable payload rejected (fixes the bytes bug)
+- [x] ISC-17: Payload length capped (≤32 chars); oversize rejected
+- [x] ISC-18: Numeric commands validated against min/max from device metadata AND config override — the tighter bound wins
+- [x] ISC-19: Out-of-range numeric command rejected, not clamped silently, with reason logged
+- [x] ISC-20: Enum/select commands validated against the item's enum list; non-member rejected
+- [x] ISC-21: Retained command messages are rejected (anti-replay on bridge/broker restart)
+- [x] ISC-22: Per-item minimum write interval enforced (default ≥2 s); violations rejected
+- [x] ISC-23: Global write rate limit enforced (default ≤10 writes/min); violations rejected
+- [x] ISC-24: Every accepted and rejected command produces one structured audit log line (timestamp, item, payload, outcome, reason)
+- [x] ISC-25: Every write result (or exception) published to `pellmon/set/<item>/result` — no swallowed exceptions
+- [x] ISC-26: Controller writes take `str` values only, enforced in nbe/protocol.py (the py3 bytes defect cannot recur)
+- [x] ISC-27: Validation logic lives in `bridge/validation.py` with no paho/gi imports (unit-testable in isolation)
 
 ### Bridge — configuration & transport security
-- [ ] ISC-28: `bridge/bridge_config.example.yaml` documents allowlist entries with min/max/interval overrides and safe commented candidates
-- [ ] ISC-29: Default example allowlist ships EMPTY (read-only unless the user consciously enables items)
-- [ ] ISC-30: MQTT username/password read from env/file, never from committed config
-- [ ] ISC-31: TLS supported: CA cert, optional client cert/key (mTLS), configurable via config/env
-- [ ] ISC-32: TLS certificate verification is ON when TLS is enabled; no `insecure` default
-- [ ] ISC-33: Bridge never logs secrets (grep of source shows no password/token in log statements)
+- [x] ISC-28: `bridge/bridge_config.example.yaml` documents allowlist entries with min/max/interval overrides and safe commented candidates
+- [x] ISC-29: Default example allowlist ships EMPTY (read-only unless the user consciously enables items)
+- [x] ISC-30: MQTT username/password read from env/file, never from committed config
+- [x] ISC-31: TLS supported: CA cert, optional client cert/key (mTLS), configurable via config/env
+- [x] ISC-32: TLS certificate verification is ON when TLS is enabled; no `insecure` default
+- [x] ISC-33: Bridge never logs secrets (grep of source shows no password/token in log statements)
 
 ### Container & compose hardening
-- [ ] ISC-34: `Dockerfile` builds the single py3 bridge on a currently-supported base image (refined: was PellMon-on-buster — see Changelog)
+- [x] ISC-34: `Dockerfile` builds the single py3 bridge on a currently-supported base image (refined: was PellMon-on-buster — see Changelog)
 - [ ] ISC-35: [DROPPED — see Decisions 2026-08-15: supervisord/multi-process design removed with PellMon]
-- [ ] ISC-36: `docker-compose.yml` uses a dedicated bridge network — no `network_mode: host`
-- [ ] ISC-37: Compose sets `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`
-- [ ] ISC-38: Root filesystem read-only with tmpfs for `/tmp`
-- [ ] ISC-39: No port published on the bridge container (UDP to furnace and MQTT are outbound-only)
+- [x] ISC-36: `docker-compose.yml` uses a dedicated bridge network — no `network_mode: host`
+- [x] ISC-37: Compose sets `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`
+- [x] ISC-38: Root filesystem read-only with tmpfs for `/tmp`
+- [x] ISC-39: No port published on the bridge container (UDP to furnace and MQTT are outbound-only)
 - [ ] ISC-40: [DROPPED — see Decisions 2026-08-15: web UI removed entirely, stronger than opt-in]
 - [ ] ISC-41: [DROPPED — see Decisions 2026-08-15: no web UI, no web credentials exist]
-- [ ] ISC-42: All secrets arrive via env_file/secrets at runtime; `docker compose config` shows none baked in image
-- [ ] ISC-43: Container healthcheck probes bridge liveness
-- [ ] ISC-44: Resource limits (memory) set in compose
+- [x] ISC-42: All secrets arrive via env_file/secrets at runtime; `docker compose config` shows none baked in image
+- [x] ISC-43: Container healthcheck probes bridge liveness
+- [x] ISC-44: Resource limits (memory) set in compose
 
 ### Broker security
-- [ ] ISC-45: `mosquitto/mosquitto.conf.example` disables anonymous access and enables TLS listener 8883
-- [ ] ISC-46: `mosquitto/acl.example` gives bridge user readwrite only on `pellmon/#` + discovery publish; HA user read `pellmon/#` + write `pellmon/set/#` only
-- [ ] ISC-47: README documents generating per-client credentials and certs (commands included)
+- [x] ISC-45: `mosquitto/mosquitto.conf.example` disables anonymous access and enables TLS listener 8883
+- [x] ISC-46: `mosquitto/acl.example` gives bridge user readwrite only on `pellmon/#` + discovery publish; HA user read `pellmon/#` + write `pellmon/set/#` only
+- [x] ISC-47: README documents generating per-client credentials and certs (commands included)
 
 ### Documentation & migration
-- [ ] ISC-48: README migration section: how to move from lakelake/pellmondocker preserving `nbeserial`/`nbepass` and RRD volume
-- [ ] ISC-49: README security model section: who may write what, and why the furnace's own interlocks remain authoritative
-- [ ] ISC-50: README documents the discovered-writable-items startup log as the way to choose allowlist entries
-- [ ] ISC-51: SECURITY.md documents residual risks (512-bit controller RSA, plaintext UDP reads, HA-side authorization) with mitigations (refined: py2-containment risk eliminated by the pivot)
+- [x] ISC-48: README migration section: how to move from lakelake/pellmondocker preserving `nbeserial`/`nbepass` and RRD volume
+- [x] ISC-49: README security model section: who may write what, and why the furnace's own interlocks remain authoritative
+- [x] ISC-50: README documents the discovered-writable-items startup log as the way to choose allowlist entries
+- [x] ISC-51: SECURITY.md documents residual risks (512-bit controller RSA, plaintext UDP reads, HA-side authorization) with mitigations (refined: py2-containment risk eliminated by the pivot)
 
 ### Tests & gates (SSDLC G2/G3)
-- [ ] ISC-52: `bridge/tests/test_validation.py` exists and passes under `python3 -m unittest` / `pytest`
-- [ ] ISC-53: Test: bytes payload decode + str-only SetItem argument contract
-- [ ] ISC-54: Test: out-of-range value rejected (both metadata bound and config override)
-- [ ] ISC-55: Test: non-allowlisted item rejected
-- [ ] ISC-56: Test: retained message rejected
-- [ ] ISC-57: Test: rate limits (per-item interval + global) enforced
-- [ ] ISC-58: Test: enum non-member rejected, member accepted
-- [ ] ISC-59: All Python files pass `python3 -m py_compile`; YAML files parse
+- [x] ISC-52: `bridge/tests/test_validation.py` exists and passes under `python3 -m unittest` / `pytest`
+- [x] ISC-53: Test: bytes payload decode + str-only SetItem argument contract
+- [x] ISC-54: Test: out-of-range value rejected (both metadata bound and config override)
+- [x] ISC-55: Test: non-allowlisted item rejected
+- [x] ISC-56: Test: retained message rejected
+- [x] ISC-57: Test: rate limits (per-item interval + global) enforced
+- [x] ISC-58: Test: enum non-member rejected, member accepted
+- [x] ISC-59: All Python files pass `python3 -m py_compile`; YAML files parse
 - [ ] ISC-60: Independent review pass (Forge quality + Cato security audit) completed with findings addressed or accepted in Decisions
 
 ### Control-loop stability (added from SystemsThinking CausalLoop analysis)
-- [ ] ISC-65: On every rejected command, bridge republishes the authoritative current value to `pellmon/<item>` and the reason to the result topic (kills optimistic-UI false success)
-- [ ] ISC-66: No-op suppression — commanded value equal to current value acks on the result topic without calling SetItem (breaks echo-mirror write loops structurally)
-- [ ] ISC-67: Every writable discovery config uses `mode: box` (no slider bursts) and every entity carries the availability topic
-- [ ] ISC-68: Bridge connects with a clean session (no QoS-1 persistent-session command redelivery on reconnect)
+- [x] ISC-65: On every rejected command, bridge republishes the authoritative current value to `pellmon/<item>` and the reason to the result topic (kills optimistic-UI false success)
+- [x] ISC-66: No-op suppression — commanded value equal to current value acks on the result topic without calling SetItem (breaks echo-mirror write loops structurally)
+- [x] ISC-67: Every writable discovery config uses `mode: box` (no slider bursts) and every entity carries the availability topic
+- [x] ISC-68: Bridge connects with a clean session (no QoS-1 persistent-session command redelivery on reconnect)
 
 ### Architecture pivot (added 2026-08-15 after the buster-EOL challenge)
-- [ ] ISC-69: Container runs as an unprivileged user (`USER bridge` in Dockerfile)
-- [ ] ISC-70: Protocol end-to-end tests pass against a fake NBE controller over real UDP, including the RSA-encrypted write round trip
-- [ ] ISC-71: Discovery refuses a controller whose reported serial differs from `NBE_SERIAL` (tested)
-- [ ] ISC-72: No Python 2 code, PellMon source, or D-Bus dependency remains in the repo
-- [ ] ISC-73: Base image is a currently-supported release (python:3.13-slim)
-- [ ] ISC-74: Healthcheck probes poll-loop liveness via the gateway heartbeat file
+- [x] ISC-69: Container runs as an unprivileged user (`USER bridge` in Dockerfile)
+- [x] ISC-70: Protocol end-to-end tests pass against a fake NBE controller over real UDP, including the RSA-encrypted write round trip
+- [x] ISC-71: Discovery refuses a controller whose reported serial differs from `NBE_SERIAL` (tested)
+- [x] ISC-72: No Python 2 code, PellMon source, or D-Bus dependency remains in the repo
+- [x] ISC-73: Base image is a currently-supported release (python:3.13-slim)
+- [x] ISC-74: Healthcheck probes poll-loop liveness via the gateway heartbeat file
+- [x] ISC-75: A timed-out controller write is never retried (may have landed; non-idempotent for buttons) — tested
+- [x] ISC-76: Allowlist enforced independently at the gateway layer, the last gate before UDP — tested
+
+### Audit round (added 2026-08-15 from Cato-fallback + GPT-5.5 cross-vendor findings)
+- [x] ISC-77: Non-finite/underscore/hex numeric payloads (`nan`, `inf`, `1e400`, `1_0`, `0x41`) rejected by strict-decimal regex — tested
+- [x] ISC-78: Frame metacharacters (`;`, `=`, control chars) rejected in every payload — tested
+- [x] ISC-79: Bridge ACL grants only single-level `pellmon/+` write — command topics are unreachable with bridge credentials (no `pellmon/#` wildcard)
+- [x] ISC-80: Rejected commands republish the cached value — an MQTT rejection flood cannot be amplified into UDP traffic toward the furnace
+- [x] ISC-81: Datagrams from an unexpected source address are dropped (tested); `Proxy.close()` takes the transact lock (no mid-request socket close)
+- [x] ISC-82: Poll thread survives any exception with traceback logging; heartbeat measures loop liveness, availability topic reports controller reachability
+- [x] ISC-83: `MQTT_PASSWORD_FILE`/`NBE_PASSWORD_FILE` docker-secrets pattern supported
+- [x] ISC-84: A missing bind-mount source (directory instead of file) fails with an actionable error, not a crash loop
+- [x] ISC-85: A command-handler exception can never kill the MQTT loop (fail closed AND stay alive, logged with traceback)
 
 ### Anti-criteria
-- [ ] ISC-61: Anti: no code path subscribes to the legacy `pellmon/settings/#` wildcard
-- [ ] ISC-62: Anti: no default credential value appears in any runtime config produced by the stack
-- [ ] ISC-63: Anti: no bare `except: pass` in any new Python file
-- [ ] ISC-64: Anti: the bridge cannot write any item absent from the allowlist even if the item is R/W on the device
+- [x] ISC-61: Anti: no code path subscribes to the legacy `pellmon/settings/#` wildcard
+- [x] ISC-62: Anti: no default credential value appears in any runtime config produced by the stack
+- [x] ISC-63: Anti: no bare `except: pass` in any new Python file
+- [x] ISC-64: Anti: the bridge cannot write any item absent from the allowlist even if the item is R/W on the device
 
 ## Test Strategy
 
@@ -223,6 +236,13 @@ image build/run and on-site control test are [DEFERRED-VERIFY] follow-ups (see V
 
 - 2026-08-15 (pivot): Peter rejected the EOL buster base mid-build ("debian:buster LTS ended in 2024") after "do a new container if needed, dont depend on lakelake". Discovered motoz/nbetest — the PellMon author's own py3 NBE protocol implementation. Dropped PellMon/py2/D-Bus/supervisord/web entirely; vendored nbetest with a raw-RSA pycryptodome adapter, seqnum wraparound fix, function-3 range queries, and serial pinning. ISC-35/40/41 tombstoned; ISC-8/26/34/38/51 refined; ISC-69..74 added. Progress denominator now 71 active.
 
+- 2026-08-15: Advisor (Rule 2) verdict: architecture right shape; adopted its three actionable gaps as ISC-75 (no write retries — lost-response writes may have landed), ISC-76 (gateway-layer allowlist gate, defense in depth), and the README "Going live safely" staged cut-over. Advisor's "writes disabled by default" and audit/availability/rate items were already implemented. Live-hardware validation remains [DEFERRED-VERIFY] and the honest status is: implementation complete, unvalidated against hardware, writes disabled by default, old stack retained for rollback.
+
+- 2026-08-15: Rule 2a caveat — `codex` CLI absent on this host, so Cato's cross-vendor (GPT) slice cannot execute; Cato proceeds as a clearly-labeled same-family fallback audit. Independence is preserved (reviewers did not author the code); vendor diversity is not. Logged as a deviation, not silently substituted.
+- 2026-08-15: Peter: "use opencode as codex" — cross-vendor property RESTORED via `opencode run --agent plan -m github-copilot/gpt-5.5` (OpenAI-family). GPT-5.5 audit dispatched against the repo; verdict recorded below when it returns. Saved as durable memory for future sessions.
+
+- 2026-08-15: Independent review round. Cato (same-family fallback, codex absent): "concerns", 2 critical. Peter: "use opencode as codex" → cross-vendor restored; GPT-5.5 via `opencode run --agent plan`: "fail", 5 findings. The two auditors independently converged on the same top two (NaN-float DoS, ACL wildcard overlap) — both fixed, plus: UDP source check + close-lock (thread race), cached republish on rejection (flood amplification), poll-thread broad catch + heartbeat semantics, `*_FILE` secrets, bind-mount guard, metacharacter rejection. All encoded as ISC-77..85 with regression tests; suite now 44 passing.
+
 ## Changelog
 
 - conjectured: keeping PellMon 0.7.0 as the device gateway was the lowest-risk path because re-implementing the NBE protocol risks the physical furnace link.
@@ -237,4 +257,14 @@ image build/run and on-site control test are [DEFERRED-VERIFY] follow-ups (see V
 
 ## Verification
 
-- [DEFERRED-VERIFY] Image build + live furnace control test require Docker + on-site network — follow-up task: `ha-pellmon-live-deploy` (build image, run against real broker, set boiler setpoint from HA, observe echo).
+- ISC-6..27, 52..58, 65..68, 70..71, 75..76: `pytest` — "41 passed in 9.47s" (bridge/tests: validation suite + e2e fake NBE controller over real UDP with real 512-bit-RSA-encrypted writes, serial pinning, no-retry-on-timeout, gateway gate, no-op suppression, retained rejection, rate limits)
+- ISC-34, 73, 69: `docker build` exit 0 on python:3.13-slim with `USER bridge`
+- ISC-36..39, 42, 44: `docker compose config` — "VALID" with hardening keys present
+- ISC-59: py files imported by pytest without error; `yaml.safe_load` OK on both YAML files
+- ISC-61: grep — only a docstring mentions `pellmon/settings/#`; no subscription
+- ISC-62: grep — no default credential in any runtime config (fake-controller test pin and vendored upstream placeholder are non-runtime)
+- ISC-63: grep `except:` — zero matches in bridge/
+- ISC-72: grep `import dbus|from gi|except Exception,` — CLEAN; no PellMon source in repo
+- ISC-1..5, 28..33, 43, 45..51: file inspection (README with migration table + go-live protocol, SECURITY.md STRIDE, LICENSE GPL-3.0 674 lines, .env.example, mosquitto conf+ACL, TLS CERT_REQUIRED with no insecure switch)
+- ISC-60: Forge + Cato reviews in flight; checked on their return
+- [DEFERRED-VERIFY] Live furnace control test requires on-site network — follow-up task: `ha-pellmon-live-deploy` (staged go-live per README: 24-48h read-only soak, first benign write with panel confirmation).

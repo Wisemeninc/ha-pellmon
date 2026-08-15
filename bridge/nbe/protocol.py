@@ -110,8 +110,17 @@ class Proxy:
             data, server = self.s.recvfrom(4096)
             self.s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 0)
             self.addr = server
+            if addr is None:
+                LOG.warning(
+                    "broadcast discovery in use — pin the controller address "
+                    "(NBE_ADDR) so an on-LAN spoofer cannot answer first"
+                )
             self.response.decode(data)
-            info = self.response.parse_payload()
+            try:
+                info = self.response.parse_payload()
+            except ValueError as exc:
+                s.close()
+                raise NbeError("malformed discovery payload: %s" % exc)
             self.serial = info.get("Serial", str(serial))
             self.ip = info.get("IP", server[0])
             if self.serial != str(serial):
@@ -134,7 +143,10 @@ class Proxy:
             request.public_key = None
 
     def close(self):
-        self.s.close()
+        # Take the transact lock so we never close the socket out from
+        # under an in-flight request on another thread.
+        with self._lock:
+            self.s.close()
 
     # ── high-level API ──────────────────────────────────────────────────
 
@@ -198,7 +210,12 @@ class Proxy:
                 self.s.settimeout(timeout or self._timeout)
                 try:
                     self.s.sendto(self.request.encode(), self.addr)
-                    data, _server = self.s.recvfrom(4096)
+                    data, server = self.s.recvfrom(4096)
+                    if server != self.addr:
+                        # Datagram from an unexpected source: ignore it and
+                        # let the retry (with a fresh sequence number) run.
+                        LOG.warning("dropping datagram from unexpected source %s", server)
+                        raise IOError("unexpected source")
                     self.response.decode(data)
                     return self.response
                 except socket.timeout as exc:

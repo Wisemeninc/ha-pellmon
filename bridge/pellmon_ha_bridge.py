@@ -54,6 +54,16 @@ AUDIT = logging.getLogger("pellmon-ha-bridge.audit")
 def load_config(path):
     cfg = {}
     if path and os.path.exists(path):
+        if os.path.isdir(path):
+            # Docker silently creates a DIRECTORY when a bind-mount source
+            # file is missing — the classic compose footgun. Fail with a
+            # message that names the fix.
+            LOG.error(
+                "%s is a directory. The compose bind-mount source file is "
+                "missing — create bridge/bridge_config.yaml (see the "
+                ".example) before starting.", path,
+            )
+            sys.exit(2)
         with open(path, "r") as fh:
             cfg = yaml.safe_load(fh) or {}
 
@@ -63,7 +73,7 @@ def load_config(path):
     m["host"] = os.environ.get("MQTT_HOST", m.get("host", "localhost"))
     m["port"] = int(os.environ.get("MQTT_PORT", m.get("port", 1883)))
     m["username"] = os.environ.get("MQTT_USERNAME", m.get("username"))
-    m["password"] = os.environ.get("MQTT_PASSWORD", m.get("password"))
+    m["password"] = _env_secret("MQTT_PASSWORD", m.get("password"))
     m["tls"] = _env_bool("MQTT_TLS", m.get("tls", False))
     m["tls_ca"] = os.environ.get("MQTT_TLS_CA", m.get("tls_ca"))
     m["tls_cert"] = os.environ.get("MQTT_TLS_CERT", m.get("tls_cert"))
@@ -71,7 +81,7 @@ def load_config(path):
 
     n = cfg.setdefault("nbe", {})
     n["serial"] = os.environ.get("NBE_SERIAL", n.get("serial"))
-    n["password"] = os.environ.get("NBE_PASSWORD", n.get("password"))
+    n["password"] = _env_secret("NBE_PASSWORD", n.get("password"))
     n["addr"] = os.environ.get("NBE_ADDR", n.get("addr"))  # None = discover
     n["port"] = int(os.environ.get("NBE_PORT", n.get("port", 8483)))
     n["poll_interval_s"] = float(
@@ -86,6 +96,18 @@ def load_config(path):
     rate.setdefault("max_writes", 10)
     rate.setdefault("window_s", 60)
     return cfg
+
+
+def _env_secret(name, default):
+    """Secret lookup: <NAME> env var, or <NAME>_FILE pointing at a file
+    (docker secrets pattern), else the config-file value."""
+    if os.environ.get(name):
+        return os.environ[name]
+    path = os.environ.get(name + "_FILE")
+    if path:
+        with open(path, "r") as fh:
+            return fh.read().strip()
+    return default
 
 
 def _env_bool(name, default):
@@ -210,7 +232,12 @@ class Bridge:
             return
         prefix = "%s/set/" % self.base
         if msg.topic.startswith(prefix) and not msg.topic.endswith("/result"):
-            self._handle_command(msg.topic[len(prefix):], msg)
+            try:
+                self._handle_command(msg.topic[len(prefix):], msg)
+            except Exception:
+                # Fail closed AND stay alive: a crafted payload must never
+                # take down the MQTT loop. Logged with traceback.
+                LOG.exception("command handling failed for %s", msg.topic)
 
     # ---------------- command path ----------------
 
@@ -237,10 +264,15 @@ class Bridge:
             retain=False,
         )
         if outcome.accepted and not outcome.noop:
+            # Fresh authoritative read-back after a real write.
             self._readback(item)
         elif not outcome.accepted:
-            # Reject-then-republish: snap the UI back to reality.
-            self._readback(item)
+            # Reject-then-republish: snap the UI back to reality — from the
+            # cache, so an MQTT rejection flood cannot be amplified into
+            # UDP traffic toward the furnace.
+            cached = self.gateway.values.get(item)
+            if cached is not None:
+                self._publish("%s/%s" % (self.base, item), cached, retain=True)
 
     def _readback(self, item):
         try:

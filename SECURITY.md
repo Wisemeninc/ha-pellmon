@@ -26,11 +26,12 @@ physical actuation (setpoint changes, start/stop), plus loss of heating.
 |---|---|---|
 | **S**poofing | Rogue MQTT client posing as HA | broker auth (no anonymous), per-user ACL: only `homeassistant` may publish `pellmon/set/#` |
 | | Rogue controller answering discovery | serial pinning: bridge refuses a controller whose reported serial ≠ `NBE_SERIAL` |
-| **T**ampering | Malicious/malformed command payloads | fail-closed validator: allowlist, strict UTF-8, length cap, numeric/enum check, tightest-bound range check |
+| **T**ampering | Malicious/malformed command payloads | fail-closed validator: allowlist (enforced again at the gateway layer), strict UTF-8, length cap, strict-decimal numeric check (non-finite floats rejected), enum check, frame-metacharacter rejection, tightest-bound range check |
+| | Spoofed UDP replies to the bridge | reply source-address check + per-request sequence number; residual on-LAN source-spoofing risk documented below |
 | | MQTT traffic interception/injection | TLS 8883 with verified certificates (no insecure switch exists in the client), optional mTLS |
 | **R**epudiation | "Who changed the setpoint?" | one structured audit line per command (accepted and rejected) with timestamp, payload, outcome, reason; per-command result topic |
 | **I**nfo disclosure | Secrets in image/repo/logs | secrets only via env at runtime; `.env` gitignored; bridge never logs credentials |
-| **D**oS | Command floods reaching the furnace | per-item min interval + global 10 writes/min budget; no-op suppression; container mem/pids limits |
+| **D**oS | Command floods reaching the furnace | per-item min interval + global 10 writes/min budget; no-op suppression; rejected commands answered from cache (no UDP amplification); a crashing payload cannot kill the MQTT loop or the poll thread; container mem/pids limits |
 | | Retained-command replay storms | retained messages rejected; clean MQTT session (no queued command redelivery) |
 | **E**levation | Container escape / lateral movement | unprivileged user, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs, no published ports, current patched base image |
 
@@ -62,8 +63,13 @@ physical actuation (setpoint changes, start/stop), plus loss of heating.
    allowlist minimal and bounds tight; HA login security is out of this
    project's scope.
 3. **Broadcast discovery mode** (only if `NBE_ADDR` is unset and host
-   networking used) accepts the first answer matching the serial.
-   Mitigation: serial pinning; prefer `NBE_ADDR`.
+   networking used) accepts the first answer matching the serial — and
+   the serial is printed on the furnace, not a secret. Mitigation:
+   serial pinning, a loud startup warning, and preferring `NBE_ADDR`.
+4. **UDP source addresses are spoofable on-LAN.** The bridge drops
+   replies from unexpected sources, but an attacker on the same segment
+   can forge the source IP. Mitigation: put the furnace and bridge on a
+   dedicated VLAN; the exposure is inherent to the vendor protocol.
 
 ## Reporting
 

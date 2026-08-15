@@ -2,17 +2,21 @@
 # Least privilege: the compromise of one credential must not grant more
 # than that client's role.
 #
+# CAUTION with wildcards: `pellmon/#` INCLUDES `pellmon/set/#`. The
+# bridge therefore gets only single-level `pellmon/+` for states —
+# never the multi-level wildcard — so a stolen bridge credential
+# cannot publish commands.
+#
 # If you use the Home Assistant mosquitto add-on instead of the bundled
 # broker, replicate these rules in its "customize" ACL configuration.
 
-# ── The bridge (inside the pellmon container) ──
-# Publishes states + discovery, reads commands. It must NOT be able to
-# publish commands to itself (write pellmon/set/# is absent on purpose).
+# ── The bridge (inside the bridge container) ──
+# Publishes states, availability, results, and discovery; reads commands.
 user pellmon-bridge
-topic write pellmon/#
-topic read  pellmon/set/#
-topic write pellmon/set/+/result
+topic write pellmon/+
 topic write pellmon/bridge/availability
+topic read  pellmon/set/+
+topic write pellmon/set/+/result
 topic write homeassistant/sensor/+/config
 topic write homeassistant/number/+/config
 topic write homeassistant/select/+/config
@@ -20,10 +24,10 @@ topic write homeassistant/button/+/config
 topic read  homeassistant/status
 
 # ── Home Assistant ──
-# Reads states + discovery, writes commands ONLY under pellmon/set/.
+# Reads everything under pellmon/, writes commands ONLY (not results).
 user homeassistant
 topic read  pellmon/#
-topic write pellmon/set/#
+topic write pellmon/set/+
 topic readwrite homeassistant/#
 
 # No other user has any access to pellmon/# — do not add pattern rules.

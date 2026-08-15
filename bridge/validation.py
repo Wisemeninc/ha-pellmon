@@ -12,9 +12,18 @@ Licensed under the GNU General Public License v3 or later.
 
 from dataclasses import dataclass, field
 from typing import Optional
+import re
 import time
 
 MAX_PAYLOAD_LEN = 32
+
+# Strict decimal only: no nan/inf, no exponents, no '1_0' underscores —
+# float() accepts all of those and NaN even passes range comparisons.
+_NUMBER_RE = re.compile(r"[+-]?[0-9]{1,10}(\.[0-9]{1,6})?")
+
+# Characters that would inject into the NBE frame ("group.name=value",
+# ';'-separated pairs) or corrupt logs. Applied to every payload.
+_FORBIDDEN_CHARS = set(";=\x00\r\n\t")
 
 
 @dataclass
@@ -136,6 +145,8 @@ class CommandValidator:
             return Outcome(False, "empty payload")
         if len(payload) > self.max_payload_len:
             return Outcome(False, "payload exceeds %d chars" % self.max_payload_len)
+        if _FORBIDDEN_CHARS.intersection(payload):
+            return Outcome(False, "payload contains forbidden characters")
 
         meta = device_meta or {}
 
@@ -152,10 +163,9 @@ class CommandValidator:
                     return Outcome(False, "value not in allowed options")
                 normalized = payload
             else:
-                try:
-                    number = float(payload)
-                except ValueError:
-                    return Outcome(False, "value is not numeric")
+                if not _NUMBER_RE.fullmatch(payload):
+                    return Outcome(False, "value is not a plain decimal number")
+                number = float(payload)
                 lo = _tightest(_parse_bound(meta.get("min")), allowed.min, max)
                 hi = _tightest(_parse_bound(meta.get("max")), allowed.max, min)
                 if lo is not None and number < lo:

@@ -89,6 +89,22 @@ class TestProxy(unittest.TestCase):
         with self.assertRaises(NbeError):
             self.proxy.get_settings("nonsense")
 
+    def test_datagram_from_wrong_source_ignored(self):
+        """Audit finding: replies were accepted from any source address."""
+        import socket as socketmod
+
+        rogue = socketmod.socket(socketmod.AF_INET, socketmod.SOCK_DGRAM)
+        try:
+            # Inject a rogue datagram into the proxy's receive queue, then
+            # issue a real request: the rogue frame must be discarded and
+            # the genuine controller answer used.
+            local = self.proxy.s.getsockname()
+            rogue.sendto(b"garbage-from-elsewhere", ("127.0.0.1", local[1]))
+            time.sleep(0.1)
+            self.assertEqual(self.proxy.get_setting("boiler", "temp"), "70")
+        finally:
+            rogue.close()
+
     def test_sequence_number_wraps(self):
         self.proxy.request.sequencenumber = 99
         self.assertEqual(self.proxy.get_setting("boiler", "temp"), "70")

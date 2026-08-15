@@ -92,10 +92,18 @@ class NbeGateway:
                 if self._proxy is None:
                     self._connect()
                 self._poll()
-                self._heartbeat()
             except (NbeError, OSError) as exc:
                 LOG.warning("controller poll failed: %s", exc)
                 self._disconnect()
+            except Exception:
+                # A malformed datagram or bug must never kill the poll
+                # thread silently: log with traceback, drop the session,
+                # and keep the loop (availability goes offline) alive.
+                LOG.exception("unexpected error in poll loop")
+                self._disconnect()
+            # Heartbeat proves the LOOP is alive; controller reachability
+            # is reported separately via the availability topic.
+            self._heartbeat()
             self._stop.wait(interval if self._proxy else min(interval, 15))
 
     def _connect(self):

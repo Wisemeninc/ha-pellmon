@@ -1,11 +1,14 @@
 # ha-pellmon bridge configuration
 #
 # Copy to bridge_config.yaml (mounted read-only into the container at
-# /run/pellmon/bridge_config.yaml via docker-compose).
+# /config/bridge_config.yaml via docker-compose). Create the file BEFORE
+# `docker compose up` — a missing bind-mount source becomes a directory.
 #
 # SECRETS DO NOT BELONG IN THIS FILE. MQTT credentials and TLS material
 # come from the environment (.env): MQTT_HOST, MQTT_PORT, MQTT_USERNAME,
-# MQTT_PASSWORD, MQTT_TLS, MQTT_TLS_CA, MQTT_TLS_CERT, MQTT_TLS_KEY.
+# MQTT_PASSWORD (or MQTT_PASSWORD_FILE), MQTT_TLS, MQTT_TLS_CA,
+# MQTT_TLS_CERT, MQTT_TLS_KEY. Furnace: NBE_SERIAL, NBE_PASSWORD (or
+# NBE_PASSWORD_FILE), NBE_ADDR.
 
 # Base topic. States: pellmon/<item>   Commands: pellmon/set/<item>
 base_topic: pellmon
