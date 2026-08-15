@@ -36,6 +36,7 @@ the GNU General Public License for details.
 import json
 import logging
 import os
+import queue
 import ssl
 import sys
 import threading
@@ -118,16 +119,29 @@ def _env_bool(name, default):
 
 
 def build_allowlist(cfg):
+    """Coerce and validate the allowlist schema — fail fast at startup so
+    a YAML typo (e.g. min: "fifty") cannot surface mid-command instead."""
     allowlist = {}
     for name, opts in (cfg.get("allowlist") or {}).items():
         opts = opts or {}
+        try:
+            lo = float(opts["min"]) if opts.get("min") is not None else None
+            hi = float(opts["max"]) if opts.get("max") is not None else None
+            interval = float(opts.get("min_interval_s", 2.0))
+        except (TypeError, ValueError) as exc:
+            LOG.error("allowlist entry %r has a non-numeric bound: %s", name, exc)
+            sys.exit(2)
+        options = opts.get("options")
+        if options is not None and not isinstance(options, list):
+            LOG.error("allowlist entry %r: options must be a list", name)
+            sys.exit(2)
         allowlist[name] = AllowedItem(
             name=name,
-            min=opts.get("min"),
-            max=opts.get("max"),
-            options=opts.get("options"),
+            min=lo,
+            max=hi,
+            options=options,
             press_payload=opts.get("press_payload"),
-            min_interval_s=float(opts.get("min_interval_s", 2.0)),
+            min_interval_s=interval,
         )
     return allowlist
 
@@ -148,6 +162,12 @@ class Bridge:
         self.availability_topic = "%s/bridge/availability" % self.base
         self._announced = threading.Event()
 
+        # Commands run on a dedicated worker so a slow furnace write
+        # (up to ~5 s) never blocks the paho network thread. Bounded
+        # queue: under a flood we drop-and-log rather than grow.
+        self._commands = queue.Queue(maxsize=32)
+        self._worker = threading.Thread(target=self._command_worker, daemon=True)
+
         self.gateway = NbeGateway(
             cfg["nbe"],
             on_online=self._controller_online,
@@ -165,6 +185,12 @@ class Bridge:
         if m.get("username"):
             self.mq.username_pw_set(m["username"], m.get("password"))
         if m.get("tls"):
+            if m.get("tls_ca") and not os.path.isfile(m["tls_ca"]):
+                LOG.error(
+                    "MQTT_TLS_CA=%s is not a file — mount the CA cert (see "
+                    "docker-compose.yml volumes) or fix the path.", m["tls_ca"],
+                )
+                sys.exit(2)
             # Certificate verification stays ON. There is deliberately no
             # "insecure" switch here.
             self.mq.tls_set(
@@ -174,8 +200,11 @@ class Bridge:
                 cert_reqs=ssl.CERT_REQUIRED,
                 tls_version=ssl.PROTOCOL_TLS_CLIENT,
             )
+        self.mq.max_queued_messages_set(1000)  # bound memory during broker outages
         self.mq.will_set(self.availability_topic, "offline", qos=1, retain=True)
         self.mq.on_connect = self._mqtt_connected
+        self.mq.on_disconnect = self._mqtt_disconnected
+        self.mq.on_subscribe = self._mqtt_subscribed
         self.mq.on_message = self._mqtt_message
 
     # ---------------- lifecycle ----------------
@@ -193,6 +222,7 @@ class Bridge:
                 )
                 time.sleep(5)
         self.mq.reconnect_delay_set(min_delay=1, max_delay=120)
+        self._worker.start()
         self.gateway.start()
         self.mq.loop_forever(retry_first_connection=True)
 
@@ -214,6 +244,9 @@ class Bridge:
     # ---------------- MQTT side ----------------
 
     def _mqtt_connected(self, client, userdata, flags, reason_code, properties=None):
+        if reason_code.is_failure:
+            LOG.error("MQTT connection refused: %s", reason_code)
+            return
         LOG.info("connected to MQTT broker")
         client.subscribe("%s/status" % self.disc)
         for name in self.allowlist:
@@ -222,6 +255,16 @@ class Bridge:
             self._announce_all(self.gateway.items, self.gateway.values)
         else:
             self._publish(self.availability_topic, "offline", retain=True)
+
+    def _mqtt_disconnected(self, client, userdata, flags, reason_code, properties=None):
+        LOG.warning("disconnected from MQTT broker: %s", reason_code)
+
+    def _mqtt_subscribed(self, client, userdata, mid, reason_codes, properties=None):
+        # An ACL-refused SUBACK would otherwise leave the bridge looking
+        # healthy but deaf to commands.
+        for rc in reason_codes:
+            if rc.is_failure:
+                LOG.error("broker refused a subscription (check the ACL): %s", rc)
 
     def _mqtt_message(self, client, userdata, msg):
         if msg.topic == "%s/status" % self.disc:
@@ -232,12 +275,22 @@ class Bridge:
             return
         prefix = "%s/set/" % self.base
         if msg.topic.startswith(prefix) and not msg.topic.endswith("/result"):
+            # Hand off to the worker: furnace I/O must not block this
+            # (paho network) thread. Bounded queue drops on flood.
             try:
-                self._handle_command(msg.topic[len(prefix):], msg)
+                self._commands.put_nowait((msg.topic[len(prefix):], msg))
+            except queue.Full:
+                LOG.warning("command queue full — dropping %s", msg.topic)
+
+    def _command_worker(self):
+        while True:
+            item, msg = self._commands.get()
+            try:
+                self._handle_command(item, msg)
             except Exception:
                 # Fail closed AND stay alive: a crafted payload must never
-                # take down the MQTT loop. Logged with traceback.
-                LOG.exception("command handling failed for %s", msg.topic)
+                # take down the worker. Logged with traceback.
+                LOG.exception("command handling failed for %s", item)
 
     # ---------------- command path ----------------
 
@@ -306,7 +359,14 @@ class Bridge:
                 self._publish("%s/%s" % (self.base, name), values[name], retain=True)
             if meta.get("type") == "R/W":
                 writable.append("%s (min=%s max=%s)" % (name, meta.get("min"), meta.get("max")))
-        self._publish(self.availability_topic, "online", retain=True)
+        # Availability reflects the CONTROLLER, not this announce call: an
+        # MQTT reconnect while the furnace is unreachable must not present
+        # frozen values as live.
+        self._publish(
+            self.availability_topic,
+            "online" if self.gateway.online else "offline",
+            retain=True,
+        )
         LOG.info(
             "discovered %d items; writable candidates for the allowlist: %s",
             len(items),
@@ -373,13 +433,12 @@ class Bridge:
         else:
             component = "sensor"
             config = common
-            # Proactively clear any stale control-entity discovery configs
-            # for items that are writable on the device but not allowlisted.
-            if writable:
-                for stale in ("number", "select", "button"):
-                    self._publish(
-                        "%s/%s/%s/config" % (self.disc, stale, uid), "", retain=True
-                    )
+
+        # Clear every OTHER component's retained discovery config for this
+        # uid: removes stale entities when an item leaves the allowlist or
+        # changes component type (number -> select, etc.).
+        for other in {"sensor", "number", "select", "button"} - {component}:
+            self._publish("%s/%s/%s/config" % (self.disc, other, uid), "", retain=True)
 
         self._publish(
             "%s/%s/%s/config" % (self.disc, component, uid),
@@ -388,7 +447,9 @@ class Bridge:
         )
 
     def _publish(self, topic, payload, retain=False):
-        self.mq.publish(topic, payload, qos=1, retain=retain)
+        info = self.mq.publish(topic, payload, qos=1, retain=retain)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            LOG.warning("publish to %s failed: rc=%s", topic, info.rc)
 
 
 def _num(raw):

@@ -56,6 +56,13 @@ class TestProxy(unittest.TestCase):
     def test_get_single_setting(self):
         self.assertEqual(self.proxy.get_setting("boiler", "temp"), "70")
 
+    def test_oversize_write_payload_refused(self):
+        """Forge finding: a >31-char 'group.name=value' silently corrupts
+        the fixed 64-byte encrypted frame — must be refused locally."""
+        with self.assertRaises(NbeError):
+            self.proxy.set_setting("hot_water", "temp", "9" * 20)
+        self.assertEqual(self.fake.writes, [])
+
     def test_encrypted_write_roundtrip(self):
         """The load-bearing test: RSA-encrypted SetItem reaches the device."""
         self.assertEqual(self.proxy.set_setting("boiler", "temp", "65"), "OK")

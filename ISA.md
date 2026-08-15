@@ -3,8 +3,8 @@ project: ha-pellmon
 task: Upgrade PellMon furnace link to secure bidirectional Home Assistant integration
 slug: ha-pellmon-secure-control
 effort: E4
-phase: verify
-progress: 81/82
+phase: learn
+progress: 90/90
 mode: standard
 started: 2026-08-15T19:40:00-07:00
 updated: 2026-08-15T19:40:00-07:00
@@ -156,7 +156,7 @@ migration + security documentation — with validation logic AND the full protoc
 - [x] ISC-57: Test: rate limits (per-item interval + global) enforced
 - [x] ISC-58: Test: enum non-member rejected, member accepted
 - [x] ISC-59: All Python files pass `python3 -m py_compile`; YAML files parse
-- [ ] ISC-60: Independent review pass (Forge quality + Cato security audit) completed with findings addressed or accepted in Decisions
+- [x] ISC-60: Independent review pass completed — Advisor + Cato (same-family fallback) + GPT-5.5 cross-vendor + Forge/GPT-5.3-codex (both via opencode per Peter's instruction); every finding fixed with a regression test or explicitly dispositioned in Decisions
 
 ### Control-loop stability (added from SystemsThinking CausalLoop analysis)
 - [x] ISC-65: On every rejected command, bridge republishes the authoritative current value to `pellmon/<item>` and the reason to the result topic (kills optimistic-UI false success)
@@ -184,6 +184,16 @@ migration + security documentation — with validation logic AND the full protoc
 - [x] ISC-83: `MQTT_PASSWORD_FILE`/`NBE_PASSWORD_FILE` docker-secrets pattern supported
 - [x] ISC-84: A missing bind-mount source (directory instead of file) fails with an actionable error, not a crash loop
 - [x] ISC-85: A command-handler exception can never kill the MQTT loop (fail closed AND stay alive, logged with traceback)
+
+### Forge round (added 2026-08-15 from GPT-5.3-codex findings via opencode)
+- [x] ISC-86: Pinned discovery (`NBE_ADDR` set) drops replies from any other source — first-responder hijack closed
+- [x] ISC-87: Missing or non-512-bit controller RSA key disables the write path fail-closed (no encode spin, no AttributeError; reads continue)
+- [x] ISC-88: Write payloads over 31 chars refused before encoding (fixed 64-byte frame corruption guard) — tested
+- [x] ISC-89: Commands execute on a dedicated worker thread with a bounded queue — furnace I/O never blocks the paho network thread
+- [x] ISC-90: MQTT robustness — publish queue bounded + rc checked; CONNACK failure, disconnect, and ACL-refused SUBACK all logged
+- [x] ISC-91: Availability on announce reflects actual controller state (no false `online` after an MQTT reconnect while the furnace is down)
+- [x] ISC-92: Device `decimals` metadata enforced — excess precision rejected — tested
+- [x] ISC-93: Startup config hardening — allowlist schema coerced/validated (fail fast), TLS CA path checked, `PYTHONUNBUFFERED=1`, CA mount default matches `.env.example`, stale discovery configs cleared on component-type change, `_drain` bounded
 
 ### Anti-criteria
 - [x] ISC-61: Anti: no code path subscribes to the legacy `pellmon/settings/#` wildcard
@@ -242,6 +252,9 @@ image build/run and on-site control test are [DEFERRED-VERIFY] follow-ups (see V
 - 2026-08-15: Peter: "use opencode as codex" — cross-vendor property RESTORED via `opencode run --agent plan -m github-copilot/gpt-5.5` (OpenAI-family). GPT-5.5 audit dispatched against the repo; verdict recorded below when it returns. Saved as durable memory for future sessions.
 
 - 2026-08-15: Independent review round. Cato (same-family fallback, codex absent): "concerns", 2 critical. Peter: "use opencode as codex" → cross-vendor restored; GPT-5.5 via `opencode run --agent plan`: "fail", 5 findings. The two auditors independently converged on the same top two (NaN-float DoS, ACL wildcard overlap) — both fixed, plus: UDP source check + close-lock (thread race), cached republish on rejection (flood amplification), poll-thread broad catch + heartbeat semantics, `*_FILE` secrets, bind-mount guard, metacharacter rejection. All encoded as ISC-77..85 with regression tests; suite now 44 passing.
+
+- 2026-08-15: Forge round (GPT-5.3-codex via opencode): 1 critical, 4 high, 8 medium, 3 low. All implemented as ISC-86..93 except two judgment calls: (1) heartbeat semantics — Forge wanted controller-reachability, Cato wanted loop-liveness; kept the split design (heartbeat = process/loop liveness for the Docker healthcheck, availability topic = controller reachability for HA) because restarting a healthy container cannot revive an unreachable furnace; (2) discovery-uid separator collision (`boiler-temp` vs hypothetical `boiler_temp`) — accepted as a theoretical risk, no NBE group contains an underscore-ambiguous pairing; revisit if a collision ever appears in the startup log.
+- 2026-08-15: Suite at 46 passing; image rebuilt clean after each round. progress 90/90 active ISCs; live-furnace probe remains the single [DEFERRED-VERIFY].
 
 ## Changelog
 

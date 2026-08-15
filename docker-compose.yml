@@ -18,8 +18,10 @@ services:
     networks: [pellmon]
     volumes:
       - ./bridge/bridge_config.yaml:/config/bridge_config.yaml:ro
-      # TLS material for the MQTT client (uncomment when MQTT_TLS=true):
-      # - ./certs/ca.crt:/config/certs/ca.crt:ro
+      # CA cert for MQTT TLS — matches the .env.example default
+      # (MQTT_TLS=true). Generate ./certs first: see README.
+      - ./certs/ca.crt:/config/certs/ca.crt:ro
+      # Optional mutual TLS:
       # - ./certs/bridge.crt:/config/certs/bridge.crt:ro
       # - ./certs/bridge.key:/config/certs/bridge.key:ro
     read_only: true

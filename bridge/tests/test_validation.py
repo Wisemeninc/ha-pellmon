@@ -113,6 +113,18 @@ class TestRangeValidation(unittest.TestCase):
         out = v.validate("boiler-temp", "85", device_meta={"min": "0", "max": "100"})
         self.assertFalse(out.accepted)
 
+    def test_excess_decimals_rejected(self):
+        """Forge finding: device decimals metadata was ignored.
+        Fresh validator per case: accepted writes consume rate budget."""
+        meta = {"min": "40", "max": "80", "decimals": "0"}
+        v, _ = make_validator()
+        self.assertFalse(v.validate("boiler-temp", "65.4", device_meta=meta).accepted)
+        v, _ = make_validator()
+        self.assertTrue(v.validate("boiler-temp", "65.0", device_meta=meta).accepted)
+        meta1 = {"min": "40", "max": "80", "decimals": "1"}
+        v, _ = make_validator()
+        self.assertTrue(v.validate("boiler-temp", "65.4", device_meta=meta1).accepted)
+
     def test_garbage_device_bounds_ignored(self):
         v, _ = make_validator()
         out = v.validate("boiler-temp", "65", device_meta={"min": "n/a", "max": None})

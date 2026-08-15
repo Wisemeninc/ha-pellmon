@@ -51,6 +51,10 @@ class NbeGateway:
     def stop(self):
         self._stop.set()
 
+    @property
+    def online(self):
+        return self._online
+
     # ── used by the MQTT command path ───────────────────────────────────
 
     def read_item(self, item_id):

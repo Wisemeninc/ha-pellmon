@@ -82,6 +82,15 @@ class RateLimiter:
         return None
 
 
+def _parse_decimals(raw) -> Optional[int]:
+    """Device 'decimals' metadata arrives as a string; parse defensively."""
+    try:
+        d = int(raw)
+        return d if d >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_bound(raw) -> Optional[float]:
     """Device metadata bounds arrive as strings; parse defensively."""
     if raw is None:
@@ -166,6 +175,14 @@ class CommandValidator:
                 if not _NUMBER_RE.fullmatch(payload):
                     return Outcome(False, "value is not a plain decimal number")
                 number = float(payload)
+                decimals = _parse_decimals(meta.get("decimals"))
+                if decimals is not None:
+                    fraction = payload.partition(".")[2]
+                    if len(fraction.rstrip("0")) > decimals:
+                        return Outcome(
+                            False,
+                            "value has more than %d decimal place(s)" % decimals,
+                        )
                 lo = _tightest(_parse_bound(meta.get("min")), allowed.min, max)
                 hi = _tightest(_parse_bound(meta.get("max")), allowed.max, min)
                 if lo is not None and number < lo:

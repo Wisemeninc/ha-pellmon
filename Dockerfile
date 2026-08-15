@@ -22,7 +22,8 @@ USER bridge
 # All configuration and secrets arrive at runtime (env / mounted files);
 # nothing is baked in. See .env.example.
 ENV BRIDGE_CONFIG=/config/bridge_config.yaml \
-    BRIDGE_LOGLEVEL=INFO
+    BRIDGE_LOGLEVEL=INFO \
+    PYTHONUNBUFFERED=1
 
 # The gateway touches /tmp/bridge-heartbeat every successful poll.
 HEALTHCHECK --interval=60s --timeout=5s --start-period=60s CMD \

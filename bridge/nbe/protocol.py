@@ -102,45 +102,62 @@ class Proxy:
             if addr is None:
                 self.s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                 target = ("<broadcast>", port)
+                LOG.warning(
+                    "broadcast discovery in use — pin the controller address "
+                    "(NBE_ADDR) so an on-LAN spoofer cannot answer first"
+                )
             else:
                 target = (addr, port)
             request.function = 0
             request.payload = "NBE Discovery"
             self.s.sendto(request.encode(), target)
-            data, server = self.s.recvfrom(4096)
+            while True:
+                try:
+                    data, server = self.s.recvfrom(4096)
+                except socket.timeout:
+                    raise NbeTimeout(
+                        "controller discovery timed out (serial %s)" % serial
+                    )
+                if addr is not None and server != (addr, port):
+                    # Pinned mode: ONLY the pinned controller may answer.
+                    LOG.warning("dropping discovery reply from %s (pinned to %s)", server, addr)
+                    continue
+                break
             self.s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 0)
             self.addr = server
-            if addr is None:
-                LOG.warning(
-                    "broadcast discovery in use — pin the controller address "
-                    "(NBE_ADDR) so an on-LAN spoofer cannot answer first"
-                )
             self.response.decode(data)
             try:
                 info = self.response.parse_payload()
             except ValueError as exc:
-                s.close()
                 raise NbeError("malformed discovery payload: %s" % exc)
             self.serial = info.get("Serial", str(serial))
             self.ip = info.get("IP", server[0])
             if self.serial != str(serial):
-                s.close()
                 raise NbeError(
                     "controller at %s reports serial %s, expected %s — refusing"
                     % (server[0], self.serial, serial)
                 )
-        except socket.timeout:
-            s.close()
-            raise NbeTimeout("controller discovery timed out (serial %s)" % serial)
 
-        # Fetch the controller's RSA public key; writes are encrypted.
-        response = self._transact(1, "misc.rsa_key")
-        try:
-            key = response.payload.split("rsa_key=")[1]
-            request.public_key = _RawRsaAdapter(RSA.importKey(base64.b64decode(key)))
-        except (IndexError, ValueError) as exc:
-            LOG.warning("controller offered no usable RSA key: %s", exc)
+            # Fetch the controller's RSA public key; writes are encrypted.
+            # frames.py raw-RSA operates on 64-byte blocks, so ONLY a
+            # 512-bit key is usable: anything else would corrupt frames
+            # (or spin forever), so the write path fails closed instead.
             request.public_key = None
+            response = self._transact(1, "misc.rsa_key")
+            try:
+                key = RSA.importKey(base64.b64decode(response.payload.split("rsa_key=")[1]))
+                if key.size_in_bits() == 512:
+                    request.public_key = _RawRsaAdapter(key)
+                else:
+                    LOG.error(
+                        "controller RSA key is %d-bit, need 512 — writes disabled",
+                        key.size_in_bits(),
+                    )
+            except (IndexError, ValueError) as exc:
+                LOG.warning("controller offered no usable RSA key: %s — writes disabled", exc)
+        except Exception:
+            s.close()
+            raise
 
     def close(self):
         # Take the transact lock so we never close the socket out from
@@ -181,11 +198,16 @@ class Proxy:
         self._check_group(group)
         if not isinstance(value, str):
             raise NbeError("value must be str")
+        if self.request.public_key is None:
+            raise NbeError("no usable controller RSA key — write path disabled")
+        payload = "%s.%s=%s" % (group, name, value)
+        # The encrypted block is fixed at 64 bytes with a 33-byte frame
+        # skeleton: an oversize payload would silently corrupt the frame.
+        if len(payload) > 31:
+            raise NbeError("write payload %r exceeds 31 chars" % payload)
         # retries=0: a timed-out write may still have landed on the
         # controller — retrying could double-apply. Fail loudly instead.
-        response = self._transact(
-            2, "%s.%s=%s" % (group, name, value), encrypt=True, timeout=5.0, retries=0
-        )
+        response = self._transact(2, payload, encrypt=True, timeout=5.0, retries=0)
         if response.status != 0:
             raise NbeRejected(response.payload or "status %d" % response.status)
         return "OK"
@@ -217,6 +239,11 @@ class Proxy:
                         LOG.warning("dropping datagram from unexpected source %s", server)
                         raise IOError("unexpected source")
                     self.response.decode(data)
+                    if self.response.function != function:
+                        raise IOError(
+                            "response function %d != request %d"
+                            % (self.response.function, function)
+                        )
                     return self.response
                 except socket.timeout as exc:
                     last_error = NbeTimeout("no response to function %d" % function)
@@ -231,7 +258,7 @@ class Proxy:
     def _drain(self):
         self.s.settimeout(0.05)
         try:
-            while True:
+            for _ in range(50):  # bounded: a datagram flood must not pin us here
                 self.s.recvfrom(4096)
         except (socket.timeout, OSError):
             return
