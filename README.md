@@ -64,14 +64,27 @@ dashboards keep working):
 git clone <this repo> && cd ha-pellmon
 cp .env.example .env && chmod 600 .env          # fill in NBE_* and MQTT_*
 cp bridge/bridge_config.example.yaml bridge/bridge_config.yaml
-# Broker setup (skip if you point MQTT_HOST at an existing broker):
+docker compose up -d --build
+docker compose logs -f bridge
+```
+
+By default the bridge connects to the **Home Assistant Mosquitto
+add-on**: set `MQTT_HOST` to your HA host, create a `pellmon-bridge`
+user in HA (or in the add-on's `logins:`), and put the rules from
+`mosquitto/acl.example` in the add-on's "customize" ACL so the bridge
+credential can never publish `pellmon/set/#`.
+
+To run the bundled hardened TLS broker instead:
+
+```sh
 cp mosquitto/mosquitto.conf.example mosquitto/mosquitto.conf
 cp mosquitto/acl.example mosquitto/acl
 #   generate certs (see "TLS certificates" below), then users:
 docker run --rm -v "$PWD/mosquitto:/m" eclipse-mosquitto:2.0.22 \
   sh -c "mosquitto_passwd -c /m/passwd pellmon-bridge && mosquitto_passwd /m/passwd homeassistant"
-docker compose up -d --build
-docker compose logs -f bridge
+# .env: MQTT_HOST=mosquitto MQTT_PORT=8883 MQTT_TLS=true, and uncomment
+# the ca.crt volume in docker-compose.yml
+docker compose --profile broker up -d --build
 ```
 
 `NBE_SERIAL` and `NBE_PASSWORD` come from the furnace panel, menu 18.
