@@ -1,7 +1,6 @@
 .env
 .venv/
 bridge/bridge_config.yaml
-mosquitto/passwd
 certs/
 *.key
 *.crt

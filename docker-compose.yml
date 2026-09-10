@@ -3,8 +3,9 @@
 #
 # Security posture:
 #   - dedicated bridge network (NOT network_mode: host)
-#   - no published ports on the bridge (UDP to the furnace + MQTT are
-#     both outbound)
+#   - no published ports (UDP to the furnace + MQTT to the Home
+#     Assistant Mosquitto add-on are both outbound); no broker is
+#     shipped here
 #   - unprivileged user, all capabilities dropped, no privilege
 #     escalation, read-only root filesystem
 #   - secrets injected at runtime from .env (chmod 600), never baked in
@@ -18,9 +19,8 @@ services:
     networks: [pellmon]
     volumes:
       - ./bridge/bridge_config.yaml:/config/bridge_config.yaml:ro
-      # CA cert for MQTT TLS — only needed with MQTT_TLS=true (the
-      # bundled broker, or an add-on with certificates configured).
-      # Generate ./certs first: see README.
+      # CA cert for MQTT TLS — only needed with MQTT_TLS=true (an add-on
+      # or broker with certificates configured). See README.
       # - ./certs/ca.crt:/config/certs/ca.crt:ro
       # Optional mutual TLS:
       # - ./certs/bridge.crt:/config/certs/bridge.crt:ro
@@ -38,38 +38,6 @@ services:
     # use `network_mode: host` (and drop `networks:`) if you truly cannot
     # pin the controller's address.
 
-  # Optional: dedicated hardened broker, started only with
-  # `docker compose --profile broker up -d`. The default deployment
-  # points MQTT_HOST at the Home Assistant Mosquitto add-on instead —
-  # apply mosquitto/acl.example there via the add-on's "customize" ACL.
-  mosquitto:
-    profiles: [broker]
-    image: eclipse-mosquitto:2.0.22
-    container_name: pellmon-mosquitto
-    restart: unless-stopped
-    networks: [pellmon]
-    ports:
-      # TLS only; no plaintext 1883 published. Prefer binding to the LAN
-      # interface the broker actually serves, e.g. "192.168.1.10:8883:8883",
-      # rather than exposing the furnace control plane on 0.0.0.0.
-      - "8883:8883"
-    volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ./mosquitto/acl:/mosquitto/config/acl:ro
-      - ./mosquitto/passwd:/mosquitto/config/passwd:ro   # mosquitto only reads it
-      - ./certs:/mosquitto/certs:ro
-      - mosquitto-data:/mosquitto/data
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    mem_limit: 256m
-
 networks:
   pellmon:
     driver: bridge
-
-volumes:
-  mosquitto-data:

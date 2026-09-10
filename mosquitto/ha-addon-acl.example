@@ -1,4 +1,12 @@
-# Per-client topic ACL for ha-pellmon. Copy to mosquitto/acl.
+# Per-client topic ACL for ha-pellmon on the Home Assistant Mosquitto
+# add-on. The add-on loads extra config through its "customize" option:
+#
+#   1. Add-on → Configuration → customize: { active: true, folder: mosquitto }
+#   2. Create /share/mosquitto/acl.conf containing one line:
+#        acl_file /share/mosquitto/accesscontrollist
+#   3. Copy this file to /share/mosquitto/accesscontrollist
+#   4. Restart the add-on.
+#
 # Least privilege: the compromise of one credential must not grant more
 # than that client's role.
 #
@@ -7,10 +15,10 @@
 # never the multi-level wildcard — so a stolen bridge credential
 # cannot publish commands.
 #
-# If you use the Home Assistant mosquitto add-on instead of the bundled
-# broker, replicate these rules in its "customize" ACL configuration.
+# User names must match MQTT_USERNAME in .env (bridge) and the HA
+# add-on's own login for Home Assistant.
 
-# ── The bridge (inside the bridge container) ──
+# ── The bridge (MQTT_USERNAME) ──
 # Publishes states, availability, results, and discovery; reads commands.
 user pellmon-bridge
 topic write pellmon/+

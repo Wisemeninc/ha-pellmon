@@ -8,8 +8,8 @@ physical actuation (setpoint changes, start/stop), plus loss of heating.
 ## Trust boundaries
 
 ```
-[LAN / furnace VLAN]          [docker network]              [HA network]
- NBE controller ◄── UDP ──► bridge container ◄── TLS ──► mosquitto ◄──► Home Assistant
+[LAN / furnace VLAN]          [docker network]           [HA host]
+ NBE controller ◄── UDP ──► bridge container ◄── MQTT ──► HA Mosquitto add-on ◄──► Home Assistant
 ```
 
 - The **NBE controller** authenticates writes with a 10-char password
@@ -18,7 +18,10 @@ physical actuation (setpoint changes, start/stop), plus loss of heating.
   change — treat the furnace LAN segment as sensitive.
 - The **bridge** is the only component that can reach the controller's
   write path from this stack.
-- The **broker** is the only ingress to the bridge (no listening ports).
+- The **broker** (the Home Assistant Mosquitto add-on; none is shipped
+  here) is the only ingress to the bridge (no listening ports). Its
+  auth and per-user ACL are the operator's responsibility — see
+  `mosquitto/ha-addon-acl.example`.
 
 ## STRIDE against the new surface
 
@@ -28,7 +31,7 @@ physical actuation (setpoint changes, start/stop), plus loss of heating.
 | | Rogue controller answering discovery | serial pinning: bridge refuses a controller whose reported serial ≠ `NBE_SERIAL` |
 | **T**ampering | Malicious/malformed command payloads | fail-closed validator: allowlist (enforced again at the gateway layer), strict UTF-8, length cap, strict-decimal numeric check (non-finite floats rejected), enum check, frame-metacharacter rejection, tightest-bound range check |
 | | Spoofed UDP replies to the bridge | reply source-address check + per-request sequence number; residual on-LAN source-spoofing risk documented below |
-| | MQTT traffic interception/injection | TLS 8883 with verified certificates (no insecure switch exists in the client), optional mTLS |
+| | MQTT traffic interception/injection | plaintext 1883 by default (bridge and HA on a trusted network); optional TLS 8883 with verified certificates (no insecure switch exists in the client), optional mTLS |
 | **R**epudiation | "Who changed the setpoint?" | one structured audit line per command (accepted and rejected) with timestamp, payload, outcome, reason; per-command result topic |
 | **I**nfo disclosure | Secrets in image/repo/logs | secrets only via env at runtime; `.env` gitignored; bridge never logs credentials |
 | **D**oS | Command floods reaching the furnace | per-item min interval + global 10 writes/min budget; no-op suppression; rejected commands answered from cache (no UDP amplification); a crashing payload cannot kill the MQTT loop or the poll thread; container mem/pids limits |

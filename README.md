@@ -35,10 +35,10 @@ UI with default credentials, `network_mode: host`).
 └────────────────┘  writes: RSA-enc  │  · validation + allowlist    │
                                      │  · audit log                 │
                                      └──────────┬───────────────────┘
-                                                │ MQTT over TLS 8883
+                                                │ MQTT (1883, or TLS 8883)
                                      ┌──────────▼───────────────────┐
-                                     │ mosquitto (auth + per-user   │
-                                     │ topic ACLs)                  │
+                                     │ HA Mosquitto add-on (auth +  │
+                                     │ per-user topic ACLs)         │
                                      └──────────┬───────────────────┘
                                                 │ MQTT Discovery
                                      ┌──────────▼───────────────────┐
@@ -68,24 +68,18 @@ docker compose up -d --build
 docker compose logs -f bridge
 ```
 
-By default the bridge connects to the **Home Assistant Mosquitto
-add-on**: set `MQTT_HOST` to your HA host, create a `pellmon-bridge`
-user in HA (or in the add-on's `logins:`), and put the rules from
-`mosquitto/acl.example` in the add-on's "customize" ACL so the bridge
-credential can never publish `pellmon/set/#`.
+No broker is shipped. The bridge connects to the **Home Assistant
+Mosquitto add-on** (or any broker you already run):
 
-To run the bundled hardened TLS broker instead:
-
-```sh
-cp mosquitto/mosquitto.conf.example mosquitto/mosquitto.conf
-cp mosquitto/acl.example mosquitto/acl
-#   generate certs (see "TLS certificates" below), then users:
-docker run --rm -v "$PWD/mosquitto:/m" eclipse-mosquitto:2.0.22 \
-  sh -c "mosquitto_passwd -c /m/passwd pellmon-bridge && mosquitto_passwd /m/passwd homeassistant"
-# .env: MQTT_HOST=mosquitto MQTT_PORT=8883 MQTT_TLS=true, and uncomment
-# the ca.crt volume in docker-compose.yml
-docker compose --profile broker up -d --build
-```
+1. Set `MQTT_HOST` in `.env` to your HA host.
+2. Create a dedicated user for the bridge (HA → Settings → People →
+   Users, or the add-on's `logins:` option) and put its name and
+   password in `MQTT_USERNAME` / `MQTT_PASSWORD`.
+3. Restrict what that user may do: enable the add-on's *customize*
+   option and install `mosquitto/ha-addon-acl.example` as its ACL, so
+   the bridge credential can never publish `pellmon/set/#`. Without an
+   ACL, the bridge allowlist is the only layer between the broker and
+   the furnace.
 
 `NBE_SERIAL` and `NBE_PASSWORD` come from the furnace panel, menu 18.
 Set `NBE_ADDR` to the controller's IP (give it a DHCP reservation) —
@@ -167,28 +161,21 @@ history from the moment you switch. Before switching, clear any retained
 messages under the legacy `pellmon/settings/#` if you ever published
 there.
 
-## TLS certificates
+## TLS (optional)
 
-Any CA workflow works; a minimal self-signed CA:
-
-```sh
-mkdir -p certs && cd certs
-openssl req -x509 -newkey rsa:4096 -nodes -keyout ca.key -out ca.crt \
-  -days 3650 -subj "/CN=pellmon-ca"
-openssl req -newkey rsa:4096 -nodes -keyout server.key -out server.csr \
-  -subj "/CN=mosquitto"
-openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -out server.crt -days 825
-```
-
-Point Home Assistant's MQTT integration at port 8883 with the same CA.
+The add-on speaks plaintext on 1883 by default, which is fine when the
+bridge and HA share a trusted network. If you enable certificates on
+the add-on (port 8883), set `MQTT_TLS=true`, uncomment the `ca.crt`
+volume in `docker-compose.yml`, and place the CA at `certs/ca.crt`.
+Certificate verification is always on; there is no insecure switch.
 
 ## Security model
 
 See [SECURITY.md](SECURITY.md) for the threat model. Summary of layers:
 
-1. **Broker authentication + per-user ACLs** — only the `homeassistant`
-   user may publish `pellmon/set/#`; the bridge cannot command itself.
+1. **Broker authentication + per-user ACLs** (configured on the HA
+   add-on) — only the `homeassistant` user may publish `pellmon/set/#`;
+   the bridge cannot command itself.
 2. **Bridge allowlist + validation** — independent second layer; an
    attacker with broker access still cannot exceed the allowlist/bounds.
 3. **Controller password + serial pinning** — writes are RSA-encrypted
