@@ -11,12 +11,13 @@ test here red.
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from nbe.protocol import NbeTimeout
+from nbe.protocol import NbeError, NbeRejected, NbeTimeout
 from nbe_gateway import NbeGateway
-from pellmon_ha_bridge import Bridge
+from pellmon_ha_bridge import Bridge, config_problem
 
 
 class StubGateway:
@@ -126,6 +127,66 @@ class TestRegistrySanitization(unittest.TestCase):
     def test_overlong_name_is_dropped(self):
         items = self._registry({"x" * 49: "1", "temp": "70"})
         self.assertEqual(list(items), ["boiler-temp"])
+
+
+class RejectingProxy(StubProxy):
+    """Answers 'boiler', then rejects (not times out) every other group —
+    firmware that answers an unsupported group with a non-zero status."""
+
+    def get_settings(self, group):
+        if group == "boiler":
+            return dict(self._settings)
+        raise NbeRejected("status 1")
+
+    def get_ranges(self, group):
+        if group == "boiler":
+            return {}
+        raise NbeError("bad frame for function 3")
+
+    def get_advanced_data(self):
+        raise NbeError("bad frame for function 11")
+
+
+class TestRegistryResilience(unittest.TestCase):
+    """Review finding: one rejected or malformed group reply must not abort
+    the whole registry build and keep the bridge offline forever."""
+
+    def test_rejected_group_is_skipped(self):
+        gw = NbeGateway({"serial": "1", "password": "x"}, lambda *a: None,
+                        lambda *a: None, lambda *a: None)
+        gw._proxy = RejectingProxy({"temp": "70"}, {"power_pct": "48"})
+        gw._build_registry()
+        self.assertIn("boiler-temp", gw.items)
+        self.assertIn("operating_data-power_pct", gw.items)
+
+
+class TestStartupConfigGuard(unittest.TestCase):
+    """Review findings: a leftover MQTT_HOST placeholder must fail fast, not
+    loop on DNS errors; an incomplete credential pair must not silently
+    connect anonymously."""
+
+    def _cfg(self, **mqtt):
+        base = {"host": "ha.local", "username": "u", "password": "p"}
+        base.update(mqtt)
+        return {"mqtt": base}
+
+    def test_placeholder_host_refused(self):
+        for host in ("<ha-host>", "", "   ", None):
+            self.assertIsNotNone(config_problem(self._cfg(host=host)), host)
+
+    def test_missing_username_refused(self):
+        self.assertIsNotNone(config_problem(self._cfg(username="")))
+        self.assertIsNotNone(config_problem(self._cfg(username=None)))
+
+    def test_missing_password_refused(self):
+        self.assertIsNotNone(config_problem(self._cfg(password="")))
+
+    def test_complete_config_accepted(self):
+        self.assertIsNone(config_problem(self._cfg()))
+
+    def test_anonymous_requires_explicit_optin(self):
+        with mock.patch.dict(os.environ, {"MQTT_ALLOW_ANONYMOUS": "true"}):
+            self.assertIsNone(config_problem(self._cfg(username="", password="")))
 
 
 class RaisingMQ(StubMQ):

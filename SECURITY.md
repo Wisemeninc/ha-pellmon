@@ -27,13 +27,14 @@ physical actuation (setpoint changes, start/stop), plus loss of heating.
 
 | Threat | Vector | Control |
 |---|---|---|
-| **S**poofing | Rogue MQTT client posing as HA | broker auth (no anonymous), per-user ACL: only `homeassistant` may publish `pellmon/set/#` |
+| **S**poofing | Rogue MQTT client posing as HA | broker auth (no anonymous), per-user ACL: only `homeassistant` may publish `pellmon/set/#`. On the plaintext default these credentials are sniffable on the wire — see residual risk 5 |
 | | Rogue controller answering discovery | **address pinning** (`NBE_ADDR`): the bridge accepts replies only from the pinned controller. Serial matching is an echo check, **not** authentication (the expected serial is carried in cleartext in the bridge's own request), so broadcast discovery is refused unless `NBE_ALLOW_BROADCAST=true`, and even then the write path stays disabled |
 | **T**ampering | Malicious/malformed command payloads | fail-closed validator: allowlist (enforced again at the gateway layer), strict UTF-8, length cap, strict-decimal numeric check (non-finite floats rejected), enum check, frame-metacharacter rejection, tightest-bound range check |
 | | Spoofed UDP replies to the bridge | reply source-address check + per-request sequence number; residual on-LAN source-spoofing risk documented below |
 | | MQTT traffic interception/injection | plaintext 1883 by default (bridge and HA on a trusted network); optional TLS 8883 with verified certificates (no insecure switch exists in the client), optional mTLS |
 | **R**epudiation | "Who changed the setpoint?" | one structured audit line per command (accepted and rejected) with timestamp, payload, outcome, reason; per-command result topic |
 | **I**nfo disclosure | Secrets in image/repo/logs | secrets only via env at runtime; `.env` gitignored; bridge never logs credentials |
+| | Secrets on the wire | MQTT credentials are sent in the CONNECT frame on every (re)connect; protected only when `MQTT_TLS=true`. The bridge logs a startup warning on plaintext — residual risk 5 |
 | **D**oS | Command floods reaching the furnace | per-item min interval + global 10 writes/min budget; no-op suppression; rejected commands answered from cache (no UDP amplification); a crashing payload cannot kill the MQTT loop or the poll thread; container mem/pids limits |
 | | Retained-command replay storms | retained messages rejected; clean MQTT session (no queued command redelivery) |
 | **E**levation | Container escape / lateral movement | unprivileged user, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs, no published ports, current patched base image |
@@ -77,6 +78,17 @@ physical actuation (setpoint changes, start/stop), plus loss of heating.
    replies from unexpected sources, but an attacker on the same segment
    can forge the source IP. Mitigation: put the furnace and bridge on a
    dedicated VLAN; the exposure is inherent to the vendor protocol.
+5. **MQTT is plaintext by default** (`MQTT_TLS=false`, the Home
+   Assistant Mosquitto add-on's stock 1883 listener). An attacker who
+   can sniff the segment between the bridge host and the HA host
+   obtains the bridge's and HA's broker credentials, can then publish
+   commands as HA (bounded by the allowlist) and forge retained
+   telemetry or availability as the bridge (masking a real furnace
+   fault). This is accepted **only** when the bridge and the broker run
+   on the same host or on a dedicated trusted VLAN — the same condition
+   risk 4 already requires for the furnace segment. Otherwise enable
+   certificates on the add-on and set `MQTT_TLS=true`; verification is
+   always on. The bridge warns at startup whenever TLS is off.
 
 ## Reporting
 

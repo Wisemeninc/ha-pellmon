@@ -151,8 +151,10 @@ class NbeGateway:
             try:
                 ranges = self._proxy.get_ranges(group)
                 settings = self._proxy.get_settings(group)
-            except NbeTimeout:
-                LOG.debug("group %s not answered; skipping", group)
+            except NbeError as exc:
+                # Timeouts, rejections and malformed frames alike: one bad
+                # group must not abort the whole registry build.
+                LOG.debug("group %s skipped: %s", group, exc)
                 continue
             for name, value in settings.items():
                 if not _SAFE_NAME.fullmatch(name):
@@ -173,8 +175,8 @@ class NbeGateway:
         ):
             try:
                 data = reader()
-            except NbeTimeout:
-                LOG.debug("%s not answered; skipping", prefix)
+            except NbeError as exc:
+                LOG.debug("%s skipped: %s", prefix, exc)
                 continue
             for name, value in data.items():
                 if not _SAFE_NAME.fullmatch(name):

@@ -195,8 +195,10 @@ class Bridge:
             clean_session=True,  # no persistent-session command redelivery
         )
         m = cfg["mqtt"]
-        if m.get("username"):
+        if m.get("username") and m.get("password"):
             self.mq.username_pw_set(m["username"], m.get("password"))
+        else:
+            LOG.warning("connecting to MQTT anonymously (no username/password)")
         if m.get("tls"):
             if m.get("tls_ca") and not os.path.isfile(m["tls_ca"]):
                 LOG.error(
@@ -492,6 +494,28 @@ def _step(decimals):
         return None
 
 
+def config_problem(cfg):
+    """Return a startup-refusal message for MQTT config that would otherwise
+    degrade into a silent retry loop or an unintended anonymous connection,
+    or None when the config is usable."""
+    m = cfg["mqtt"]
+    host = (m.get("host") or "").strip()
+    if not host or "<" in host or ">" in host:
+        return (
+            "MQTT_HOST is unset or still the .env.example placeholder (%r). "
+            "Set it to your Home Assistant host IP or DNS name." % host
+        )
+    if not (m.get("username") and m.get("password")) and not _env_bool(
+        "MQTT_ALLOW_ANONYMOUS", False
+    ):
+        return (
+            "Refusing to start without complete MQTT credentials (username AND "
+            "password). Set MQTT_USERNAME/MQTT_PASSWORD, or "
+            "MQTT_ALLOW_ANONYMOUS=true to accept the risk."
+        )
+    return None
+
+
 def main():
     logging.basicConfig(
         stream=sys.stdout,
@@ -512,12 +536,16 @@ def main():
             "stay disabled in broadcast mode)."
         )
         sys.exit(1)
-    if not cfg["mqtt"].get("password") and not _env_bool("MQTT_ALLOW_ANONYMOUS", False):
-        LOG.error(
-            "Refusing to start without MQTT credentials. Set MQTT_USERNAME/"
-            "MQTT_PASSWORD, or MQTT_ALLOW_ANONYMOUS=true to accept the risk."
-        )
+    problem = config_problem(cfg)
+    if problem:
+        LOG.error(problem)
         sys.exit(1)
+    if not cfg["mqtt"].get("tls"):
+        LOG.warning(
+            "MQTT is plaintext: broker credentials, telemetry and commands "
+            "cross the network unprotected. Set MQTT_TLS=true where the broker "
+            "has certificates (see SECURITY.md, residual risk 5)."
+        )
     if cfg.get("allowlist"):
         LOG.info("write allowlist: %s", ", ".join(sorted(cfg["allowlist"])))
     else:
