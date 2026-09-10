@@ -7,6 +7,18 @@
 #   3. Copy this file to /share/mosquitto/accesscontrollist
 #   4. Restart the add-on.
 #
+# THIS FILE REPLACES THE BROKER'S ENTIRE ACL. Mosquitto reads exactly one
+# acl_file and denies everything not listed, so every other client on a
+# shared add-on (Zigbee2MQTT, ESPHome, Frigate, ...) loses access unless
+# you add its rules here. The `pattern` line at the bottom keeps a
+# per-user namespace open for them; add explicit blocks for anything else.
+#
+# Topics assume the default base topic `pellmon` (MQTT_BASE_TOPIC).
+#
+# Verify after installing (both commands must be REFUSED):
+#   mosquitto_pub -h <ha-host> -u pellmon-bridge -P ... -t pellmon/set/boiler-temp -m 65
+#   mosquitto_pub -h <ha-host> -u homeassistant  -P ... -t pellmon/set/boiler-temp/result -m x
+#
 # Least privilege: the compromise of one credential must not grant more
 # than that client's role.
 #
@@ -38,4 +50,7 @@ topic read  pellmon/#
 topic write pellmon/set/+
 topic readwrite homeassistant/#
 
-# No other user has any access to pellmon/# — do not add pattern rules.
+# ── Everyone else ──
+# Each other login keeps its own <username>/# namespace. Nothing outside
+# the blocks above may touch pellmon/# — do not add broader patterns.
+pattern readwrite %u/#

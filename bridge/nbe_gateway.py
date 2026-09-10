@@ -26,7 +26,7 @@ HEARTBEAT_FILE = "/tmp/bridge-heartbeat"
 # characters in a name would let whoever answers discovery (unauthenticated
 # in broadcast mode) inject topics or crash every publish, so anything
 # outside this conservative set is dropped at the trust boundary.
-_SAFE_NAME = re.compile(r"[A-Za-z0-9_]{1,48}")
+_SAFE_NAME = re.compile(r"\A[A-Za-z0-9_]{1,48}\Z")
 
 
 class NbeGateway:

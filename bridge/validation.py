@@ -181,9 +181,9 @@ class CommandValidator:
                 return Outcome(False, "button item accepts only %r" % allowed.press_payload)
             normalized = payload
         else:
+            # Only the operator's options list is authoritative: a
+            # device-supplied enum must never replace the numeric bounds.
             options = allowed.options
-            if options is None:
-                options = meta.get("options")
             if options is not None:
                 if payload not in [str(o) for o in options]:
                     return Outcome(False, "value not in allowed options")

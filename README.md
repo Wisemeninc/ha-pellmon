@@ -72,9 +72,10 @@ No broker is shipped. The bridge connects to the **Home Assistant
 Mosquitto add-on** (or any broker you already run):
 
 1. Set `MQTT_HOST` in `.env` to your HA host.
-2. Create a dedicated user for the bridge (HA → Settings → People →
-   Users, or the add-on's `logins:` option) and put its name and
-   password in `MQTT_USERNAME` / `MQTT_PASSWORD`.
+2. Create a dedicated broker-only login for the bridge with the
+   add-on's `logins:` option (preferred over an HA user account, which
+   would carry HA permissions) and put its name and password in
+   `MQTT_USERNAME` / `MQTT_PASSWORD`.
 3. Restrict what that user may do: enable the add-on's *customize*
    option and install `mosquitto/ha-addon-acl.example` as its ACL, so
    the bridge credential can never publish `pellmon/set/#`. Without an
@@ -94,8 +95,10 @@ The bridge starts **read-only**. To enable a control:
 
 1. Read the startup log line `writable candidates for the allowlist:` —
    it lists every writable item with the controller's own min/max.
-2. Add the item to `bridge/bridge_config.yaml` under `allowlist:`,
-   ideally with tighter bounds than the device's:
+2. Add the item to `bridge/bridge_config.yaml` under `allowlist:` with
+   `min` and `max`. Numeric items need a bound on both sides, from your
+   config or from the device; the tighter one wins per side, and a
+   missing side leaves the item read-only:
 
    ```yaml
    allowlist:

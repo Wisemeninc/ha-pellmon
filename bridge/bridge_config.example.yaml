@@ -29,7 +29,11 @@ rate_limit:
 # (it lists every R/W item your controller exposes, with device min/max).
 #
 # Per item you may set:
-#   min / max        - tighter bounds than the device's (tightest wins)
+#   min / max        - REQUIRED for numeric items unless the controller
+#                      reports usable bounds for BOTH sides; the tighter of
+#                      config and device wins per side. A missing side fails
+#                      closed: the item is announced read-only and every
+#                      write is rejected.
 #   options          - list of allowed values (select entity)
 #   press_payload    - exact payload for momentary/button items
 #   min_interval_s   - min seconds between accepted writes (default 2.0)

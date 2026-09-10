@@ -47,7 +47,7 @@ import paho.mqtt.client as mqtt
 import yaml
 
 from nbe_gateway import NbeGateway
-from validation import AllowedItem, CommandValidator, Outcome, RateLimiter
+from validation import AllowedItem, CommandValidator, Outcome, RateLimiter, _tightest
 
 LOG = logging.getLogger("pellmon-ha-bridge")
 AUDIT = logging.getLogger("pellmon-ha-bridge.audit")
@@ -432,23 +432,36 @@ class Bridge:
                     }
                 )
             else:
-                component = "number"
-                config = dict(common)
-                config.update(
-                    {
-                        "command_topic": "%s/set/%s" % (self.base, name),
-                        "mode": "box",  # never slider: avoids command bursts
-                    }
-                )
-                lo = allowed.min if allowed.min is not None else _num(meta.get("min"))
-                hi = allowed.max if allowed.max is not None else _num(meta.get("max"))
-                step = _step(meta.get("decimals"))
-                if lo is not None:
-                    config["min"] = lo
-                if hi is not None:
-                    config["max"] = hi
-                if step is not None:
-                    config["step"] = step
+                # Advertise exactly the range the validator enforces: the
+                # tighter of config and device bounds on each side. The
+                # validator rejects every write when either side is missing,
+                # so announcing a number entity then would create a control
+                # that can never work — fall back to a sensor and say why.
+                lo = _tightest(_num(meta.get("min")), allowed.min, max)
+                hi = _tightest(_num(meta.get("max")), allowed.max, min)
+                if lo is None or hi is None:
+                    LOG.error(
+                        "allowlist item %s has no %s bound from config or "
+                        "device; announcing it read-only. Set min AND max in "
+                        "bridge_config.yaml.",
+                        name, "lower" if lo is None else "upper",
+                    )
+                    component = "sensor"
+                    config = common
+                else:
+                    component = "number"
+                    config = dict(common)
+                    config.update(
+                        {
+                            "command_topic": "%s/set/%s" % (self.base, name),
+                            "mode": "box",  # never slider: avoids command bursts
+                            "min": lo,
+                            "max": hi,
+                        }
+                    )
+                    step = _step(meta.get("decimals"))
+                    if step is not None:
+                        config["step"] = step
         else:
             component = "sensor"
             config = common
@@ -488,10 +501,15 @@ def _num(raw):
 
 
 def _step(decimals):
+    """Number-entity step from the device's decimals count. Bounded so a
+    bogus value cannot underflow to a 0.0 step in the discovery payload."""
     try:
-        return 10 ** -int(decimals) if int(decimals) > 0 else 1
+        d = int(decimals)
     except (TypeError, ValueError):
         return None
+    if d == 0:
+        return 1
+    return 10 ** -d if 0 < d <= 6 else None
 
 
 def config_problem(cfg):

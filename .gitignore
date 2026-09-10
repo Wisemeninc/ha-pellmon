@@ -2,6 +2,10 @@
 .venv/
 bridge/bridge_config.yaml
 certs/
+# leftovers from the pre-add-on bundled broker
+mosquitto/passwd
+mosquitto/acl
+mosquitto/mosquitto.conf
 *.key
 *.crt
 *.pem

@@ -4,9 +4,11 @@ controller over real UDP on localhost, including RSA-encrypted writes.
 """
 
 import os
+import socket
 import sys
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -146,6 +148,39 @@ class TestBroadcastDiscovery(unittest.TestCase):
         with self.assertRaises(NbeError) as ctx:
             Proxy(password="x", serial="10039", addr=None)
         self.assertIn("broadcast", str(ctx.exception).lower())
+
+    def test_broadcast_mode_disables_writes_end_to_end(self):
+        """Deleting the `if addr is None` guard in Proxy.__init__ (which
+        skips the RSA key fetch) must turn this red: reads work, no key is
+        ever held, and a write can never reach the controller."""
+        fake = FakeController()
+        fake.start()
+        real_socket = socket.socket
+
+        class LoopbackBroadcast(real_socket):
+            # The fake binds loopback; steer the broadcast datagram there.
+            def sendto(self, data, target):
+                if target[0] == "<broadcast>":
+                    target = ("127.0.0.1", target[1])
+                return super().sendto(data, target)
+
+        try:
+            with mock.patch.object(socket, "socket", LoopbackBroadcast):
+                proxy = Proxy(password=fake.pincode, serial=fake.serial,
+                              addr=None, allow_broadcast=True,
+                              port=fake.port, timeout=1.0)
+            try:
+                self.assertEqual(proxy.get_settings("boiler")["temp"], "70")
+                self.assertIsNone(proxy.request.public_key)
+                with self.assertRaises(NbeError):
+                    proxy.set_setting("boiler", "temp", "65")
+                self.assertEqual(fake.writes, [])
+                self.assertEqual(fake.write_attempts, 0)
+            finally:
+                proxy.close()
+        finally:
+            fake.stop()
+            fake.join(timeout=2)
 
 
 class TestFrameDecodeBounds(unittest.TestCase):
