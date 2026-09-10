@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from fake_controller import FakeController
 from nbe.protocol import Proxy, NbeRejected, NbeTimeout, NbeError
+from nbe.frames import Request_frame, Response_frame
 from nbe_gateway import NbeGateway
 
 
@@ -116,6 +117,53 @@ class TestProxy(unittest.TestCase):
         self.proxy.request.sequencenumber = 99
         self.assertEqual(self.proxy.get_setting("boiler", "temp"), "70")
         self.assertLess(self.proxy.request.sequencenumber, 100)
+
+
+class TestRsaKeySizeGate(unittest.TestCase):
+    """Security finding: the write path must fail closed when the
+    controller's RSA key is not the 512-bit key raw RSA requires."""
+
+    def test_non_512bit_key_disables_writes(self):
+        fake = FakeController(key_bits=1024)
+        fake.start()
+        try:
+            proxy = make_proxy(fake)
+            self.assertIsNone(proxy.request.public_key)
+            with self.assertRaises(NbeError):
+                proxy.set_setting("boiler", "temp", "65")
+            self.assertEqual(fake.writes, [])
+            proxy.close()
+        finally:
+            fake.stop()
+            fake.join(timeout=2)
+
+
+class TestBroadcastDiscovery(unittest.TestCase):
+    """Security finding: broadcast discovery trusts the first responder and
+    serial "pinning" is only an echo check — refuse it unless opted in."""
+
+    def test_broadcast_refused_by_default(self):
+        with self.assertRaises(NbeError) as ctx:
+            Proxy(password="x", serial="10039", addr=None)
+        self.assertIn("broadcast", str(ctx.exception).lower())
+
+
+class TestFrameDecodeBounds(unittest.TestCase):
+    """Security finding: a short datagram must raise IOError (taken by the
+    retry path), never IndexError (which escapes it and tears the session
+    down)."""
+
+    def test_short_response_raises_ioerror(self):
+        resp = Response_frame(Request_frame())
+        for bad in (b"", b"A" * 5, b"A" * 18, b"A" * 27):
+            with self.assertRaises(IOError):
+                resp.decode(bad)
+
+    def test_short_request_raises_ioerror(self):
+        req = Request_frame()
+        for bad in (b"", b"A" * 5, b"A" * 18, b"A" * 51):
+            with self.assertRaises(IOError):
+                req.decode(bad)
 
 
 class TestProxyOffline(unittest.TestCase):

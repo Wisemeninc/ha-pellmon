@@ -49,11 +49,14 @@ def parse_block(h):
 class FakeController(threading.Thread):
     """Answers discovery, reads, range queries, and encrypted writes."""
 
-    def __init__(self, serial="10039", pincode="1234567890"):
+    def __init__(self, serial="10039", pincode="1234567890", key_bits=512):
         super().__init__(daemon=True)
         self.serial = serial
         self.pincode = pincode
-        self.key = make_512bit_key()
+        # key_bits != 512 exercises the fail-closed RSA key-size gate: the
+        # bridge must refuse to use a non-512-bit key (raw RSA needs the
+        # exact 64-byte block) and disable writes.
+        self.key = make_512bit_key() if key_bits == 512 else RSA.generate(key_bits)
         self.settings = {"boiler": {"temp": "70", "diff_over": "5"}}
         self.ranges = {"boiler": {"temp": "10,90,60,0", "diff_over": "0,20,5,0"}}
         self.operating = {"boiler_temp": "71.5", "state": "5"}

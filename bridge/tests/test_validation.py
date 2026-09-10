@@ -130,6 +130,71 @@ class TestRangeValidation(unittest.TestCase):
         out = v.validate("boiler-temp", "65", device_meta={"min": "n/a", "max": None})
         self.assertTrue(out.accepted)
 
+    def test_nonfinite_device_bounds_do_not_void_config_bounds(self):
+        """Security finding: float('nan')/('inf') as a DEVICE bound must be
+        treated as absent — otherwise NaN wins _tightest and voids the
+        operator's own min/max (fail-open on the last safety control)."""
+        for evil in ("nan", "NaN", "inf", "-inf", "Infinity"):
+            v, _ = make_validator()  # config min=40 max=80
+            meta = {"min": evil, "max": evil}
+            self.assertFalse(
+                v.validate("boiler-temp", "9999999999", device_meta=meta).accepted,
+                "device bound %r let an out-of-range value through" % evil,
+            )
+            v, _ = make_validator()
+            self.assertTrue(
+                v.validate("boiler-temp", "65", device_meta=meta).accepted,
+                "device bound %r wrongly rejected an in-range value" % evil,
+            )
+
+    def test_numeric_item_with_no_bounds_is_rejected(self):
+        """Security finding: an allowlisted numeric item with neither config
+        nor device bounds must fail closed, not accept an arbitrary value."""
+        v, _ = make_validator({"regulation-x": AllowedItem("regulation-x")})
+        out = v.validate("regulation-x", "9999999999")
+        self.assertFalse(out.accepted)
+        self.assertIn("bounds", out.reason)
+        # Absent device min/max is the same as no bound.
+        v, _ = make_validator({"regulation-x": AllowedItem("regulation-x")})
+        self.assertFalse(
+            v.validate("regulation-x", "50", device_meta={"type": "R/W"}).accepted
+        )
+
+    def test_numeric_item_with_one_sided_bounds_is_rejected(self):
+        """Security finding: a single usable bound must still fail closed —
+        min-only leaves the safety-relevant upper side unguarded, and hostile
+        device metadata (max: 'n/a') produces exactly that shape."""
+        # Config-side: min only.
+        v, _ = make_validator({"regulation-x": AllowedItem("regulation-x", min=10)})
+        out = v.validate("regulation-x", "9999999999")
+        self.assertFalse(out.accepted)
+        self.assertIn("no usable max", out.reason)
+        # Config-side: max only.
+        v, _ = make_validator({"regulation-x": AllowedItem("regulation-x", max=80)})
+        out = v.validate("regulation-x", "-9999999999")
+        self.assertFalse(out.accepted)
+        self.assertIn("no usable min", out.reason)
+        # Device-metadata side: unparseable max voids that bound only.
+        v, _ = make_validator({"regulation-x": AllowedItem("regulation-x")})
+        out = v.validate(
+            "regulation-x", "9999999999", device_meta={"min": "10", "max": "n/a"}
+        )
+        self.assertFalse(out.accepted)
+        # Device-metadata side: min present, max absent entirely.
+        v, _ = make_validator({"regulation-x": AllowedItem("regulation-x")})
+        out = v.validate("regulation-x", "9999999999", device_meta={"min": "10"})
+        self.assertFalse(out.accepted)
+
+    def test_small_decimal_not_emitted_as_exponent(self):
+        """Security finding: repr(0.00005)=='5e-05' would be sent verbatim
+        and could be misread as 5. The emitted string must stay decimal."""
+        v, _ = make_validator({"regulation-x": AllowedItem("regulation-x", min=0, max=1)})
+        meta = {"min": "0", "max": "1", "decimals": "5"}
+        out = v.validate("regulation-x", "0.00005", device_meta=meta)
+        self.assertTrue(out.accepted, out.reason)
+        self.assertNotIn("e", out.value.lower())
+        self.assertEqual(out.value, "0.00005")
+
     def test_non_numeric_value_rejected(self):
         v, _ = make_validator()
         out = v.validate("boiler-temp", "warm")

@@ -78,9 +78,20 @@ class _RawRsaAdapter:
 class Proxy:
     """One authenticated session with an NBE controller."""
 
-    def __init__(self, password, serial, addr=None, port=DEFAULT_PORT, timeout=2.0, retries=2):
+    def __init__(self, password, serial, addr=None, port=DEFAULT_PORT, timeout=2.0,
+                 retries=2, allow_broadcast=False):
         if not serial or not str(serial).isdigit():
             raise NbeError("a numeric controller serial is required")
+        # Broadcast discovery trusts the first responder: the serial it
+        # must echo is carried in cleartext in our own request, so serial
+        # "pinning" is not authentication. Refuse it unless explicitly
+        # opted in, and even then keep the write path disabled (below).
+        if addr is None and not allow_broadcast:
+            raise NbeError(
+                "refusing broadcast discovery: pin the controller address "
+                "(NBE_ADDR), or set NBE_ALLOW_BROADCAST=true to accept the "
+                "risk (writes stay disabled in broadcast mode)"
+            )
         self._lock = threading.Lock()
         self._timeout = timeout
         self._retries = retries
@@ -143,18 +154,28 @@ class Proxy:
             # 512-bit key is usable: anything else would corrupt frames
             # (or spin forever), so the write path fails closed instead.
             request.public_key = None
-            response = self._transact(1, "misc.rsa_key")
-            try:
-                key = RSA.importKey(base64.b64decode(response.payload.split("rsa_key=")[1]))
-                if key.size_in_bits() == 512:
-                    request.public_key = _RawRsaAdapter(key)
-                else:
-                    LOG.error(
-                        "controller RSA key is %d-bit, need 512 — writes disabled",
-                        key.size_in_bits(),
-                    )
-            except (IndexError, ValueError) as exc:
-                LOG.warning("controller offered no usable RSA key: %s — writes disabled", exc)
+            if addr is None:
+                # Broadcast mode: the responder is unauthenticated, so we
+                # must NOT hand it the write password (it sits inside the
+                # RSA-encrypted block, encrypted to whatever key it serves).
+                # Leave the write path disabled; reads only.
+                LOG.warning(
+                    "broadcast discovery: writes are DISABLED — the responder "
+                    "is unauthenticated. Pin NBE_ADDR to enable control."
+                )
+            else:
+                response = self._transact(1, "misc.rsa_key")
+                try:
+                    key = RSA.importKey(base64.b64decode(response.payload.split("rsa_key=")[1]))
+                    if key.size_in_bits() == 512:
+                        request.public_key = _RawRsaAdapter(key)
+                    else:
+                        LOG.error(
+                            "controller RSA key is %d-bit, need 512 — writes disabled",
+                            key.size_in_bits(),
+                        )
+                except (IndexError, ValueError) as exc:
+                    LOG.warning("controller offered no usable RSA key: %s — writes disabled", exc)
         except Exception:
             s.close()
             raise
@@ -248,8 +269,9 @@ class Proxy:
                 except socket.timeout as exc:
                     last_error = NbeTimeout("no response to function %d" % function)
                     LOG.debug("timeout on function %d (attempt %d)", function, attempt + 1)
-                except (IOError, ValueError) as exc:
-                    # Frame/sequence mismatch: drain stale datagrams, retry
+                except (IOError, ValueError, IndexError) as exc:
+                    # Frame/sequence mismatch (incl. a truncated datagram
+                    # indexing past its end): drain stale datagrams, retry
                     # with a fresh sequence number.
                     last_error = NbeError("bad frame for function %d: %s" % (function, exc))
                     self._drain()

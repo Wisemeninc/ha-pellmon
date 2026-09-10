@@ -39,7 +39,9 @@ class Request_frame(object):
         self.function = 0
 
     def encode(self):
+        attempts = 0
         while True:
+            attempts += 1
             success = True
             self.framedata = ('%12s'%self.appid[:12]).encode('ascii')
             self.framedata += ('%06d'%int(self.controllerid[:6])).encode('ascii')
@@ -87,19 +89,25 @@ class Request_frame(object):
             self.framedata += h
             if success:
                 return self.framedata
-            print ('ERROR chipertext wrong length', len(h))
+            # Only the encrypted branch can fail (ciphertext != 64 bytes).
+            # Bound the retry so a pathological case cannot spin forever
+            # while the proxy lock is held.
+            if attempts >= 64:
+                raise IOError("ciphertext never reached 64 bytes after %d tries" % attempts)
 
     def decode(self, record):
+        # Length check BEFORE any indexing so a short/truncated datagram
+        # raises IOError (caught by the retry logic) instead of IndexError.
+        if len(record) < self.REQUEST_HEADER_SIZE:
+            raise IOError
         i = 0
-        self.appid = record[i:12]
+        self.appid = record[i:i+12]
         i+=12
-        self.controllerid = record[i:6]
+        self.controllerid = record[i:i+6]
         i+=6
-        self.encryption = record[i:1]
+        self.encryption = record[i:i+1]
         i+=1
         if not record[i] == START[0]:
-            raise IOError
-        if len(record) < 17:
             raise IOError
         i += 1
         self.function = int(record[i:i+2])
@@ -145,16 +153,18 @@ class Response_frame(object):
         return self.framedata
 
     def decode(self, record):
+        # Length check BEFORE any indexing: a datagram shorter than the
+        # fixed header must raise IOError (taken by _transact's retry path),
+        # never IndexError (which escapes it and tears down the session).
+        if len(record) < self.RESPONSE_HEADER_SIZE:
+            raise IOError
         self.framedata = record
         i = 0
         self.appid = record[i:i+12]
         i+=12
         self.controllerid = record[i:i+6]
         i+=6
-        #import pdb;pdb.set_trace()i
         if not record[i] == START[0]:
-            raise IOError
-        if len(record) < self.RESPONSE_HEADER_SIZE:
             raise IOError
         i += 1
         self.function = int(record[i:i+2])

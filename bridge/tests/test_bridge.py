@@ -1,0 +1,172 @@
+# -*- coding: utf-8 -*-
+"""Bridge-level guard-wiring tests.
+
+The validator is unit-tested in isolation; these assert the wiring — that
+`_handle_command` actually runs every payload through the validator (with
+the retained flag and device metadata) BEFORE anything reaches the gateway
+write. Deleting the validate() call or the `retained=` argument must turn a
+test here red.
+"""
+
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from nbe.protocol import NbeTimeout
+from nbe_gateway import NbeGateway
+from pellmon_ha_bridge import Bridge
+
+
+class StubGateway:
+    def __init__(self):
+        self.items = {"boiler-temp": {"type": "R/W", "min": "10", "max": "90"}}
+        self.values = {"boiler-temp": "70"}
+        self.online = True
+        self.set_calls = []
+
+    def set_item(self, item, value):
+        self.set_calls.append((item, value))
+        return "OK"
+
+    def read_item(self, item):
+        return self.values.get(item)
+
+
+class _StubResult:
+    rc = 0  # mqtt.MQTT_ERR_SUCCESS
+
+
+class StubMQ:
+    def __init__(self):
+        self.published = []
+
+    def publish(self, topic, payload, qos=1, retain=False):
+        self.published.append((topic, payload, retain))
+        return _StubResult()
+
+
+class Msg:
+    def __init__(self, payload, retain=False, item="boiler-temp"):
+        self.payload = payload
+        self.retain = retain
+        self.topic = "pellmon/set/%s" % item
+
+
+def make_bridge(allowlist=None):
+    cfg = {
+        "base_topic": "pellmon",
+        "discovery_prefix": "homeassistant",
+        "device_name": "Test Furnace",
+        "allowlist": allowlist
+        if allowlist is not None
+        else {"boiler-temp": {"min": 40, "max": 80}},
+        "rate_limit": {"max_writes": 10, "window_s": 60},
+        "mqtt": {"host": "localhost", "port": 1883},
+        "nbe": {"serial": "1", "password": "x", "addr": "127.0.0.1", "port": 1},
+    }
+    bridge = Bridge(cfg)
+    bridge.gateway = StubGateway()
+    bridge.mq = StubMQ()
+    return bridge
+
+
+class StubProxy:
+    """Answers the 'boiler' settings group and operating data only."""
+
+    def __init__(self, settings, operating=None):
+        self._settings = settings
+        self._operating = operating or {}
+
+    def get_settings(self, group):
+        if group == "boiler":
+            return dict(self._settings)
+        raise NbeTimeout("no answer")
+
+    def get_ranges(self, group):
+        if group == "boiler":
+            return {}
+        raise NbeTimeout("no answer")
+
+    def get_operating_data(self):
+        return dict(self._operating)
+
+    def get_advanced_data(self):
+        raise NbeTimeout("no answer")
+
+
+class TestRegistrySanitization(unittest.TestCase):
+    """Security finding: controller-supplied item names become MQTT topic
+    segments; wildcards/separators from an unauthenticated (broadcast-mode)
+    responder must never reach topic construction."""
+
+    def _registry(self, settings, operating=None):
+        gw = NbeGateway({"serial": "1", "password": "x"}, lambda *a: None,
+                        lambda *a: None, lambda *a: None)
+        gw._proxy = StubProxy(settings, operating)
+        gw._build_registry()
+        return gw.items
+
+    def test_unsafe_names_are_dropped(self):
+        items = self._registry(
+            {"temp": "70", "we#ird": "2", "a/b": "3", "pl+us": "4",
+             "nul\x00": "5", "": "6"},
+            {"power_pct": "48", "sneaky#": "1"},
+        )
+        self.assertIn("boiler-temp", items)
+        self.assertIn("operating_data-power_pct", items)
+        for bad in items:
+            self.assertNotIn("#", bad)
+            self.assertNotIn("+", bad.partition("-")[2])
+            self.assertNotIn("/", bad)
+            self.assertNotIn("\x00", bad)
+        self.assertEqual(len(items), 2)
+
+    def test_overlong_name_is_dropped(self):
+        items = self._registry({"x" * 49: "1", "temp": "70"})
+        self.assertEqual(list(items), ["boiler-temp"])
+
+
+class RaisingMQ(StubMQ):
+    def publish(self, topic, payload, qos=1, retain=False):
+        if "#" in topic or "+" in topic:
+            raise ValueError("Publish topic cannot contain wildcards.")
+        return super().publish(topic, payload, qos=qos, retain=retain)
+
+
+class TestPublishGuard(unittest.TestCase):
+    def test_wildcard_topic_does_not_unwind(self):
+        """Second layer: even if a bad topic reaches paho, the ValueError
+        must be contained, not unwind the poll thread into a reconnect loop."""
+        b = make_bridge()
+        b.mq = RaisingMQ()
+        b._publish("pellmon/we#ird", "2")  # must not raise
+        b._publish("pellmon/ok", "1")
+        self.assertEqual(b.mq.published, [("pellmon/ok", "1", False)])
+
+
+class TestBridgeCommandWiring(unittest.TestCase):
+    def test_valid_command_reaches_gateway(self):
+        b = make_bridge()
+        b._handle_command("boiler-temp", Msg(b"65"))
+        self.assertEqual(b.gateway.set_calls, [("boiler-temp", "65")])
+
+    def test_retained_command_never_reaches_gateway(self):
+        b = make_bridge()
+        b._handle_command("boiler-temp", Msg(b"65", retain=True))
+        self.assertEqual(b.gateway.set_calls, [])
+
+    def test_out_of_range_never_reaches_gateway(self):
+        b = make_bridge()
+        b._handle_command("boiler-temp", Msg(b"999"))
+        self.assertEqual(b.gateway.set_calls, [])
+
+    def test_non_allowlisted_never_reaches_gateway(self):
+        b = make_bridge()
+        b._handle_command("auger-output", Msg(b"5", item="auger-output"))
+        self.assertEqual(b.gateway.set_calls, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -11,6 +11,7 @@ Copyright (C) 2026 ha-pellmon contributors, GPL-2.0-or-later.
 """
 
 import logging
+import re
 import threading
 import time
 
@@ -19,6 +20,13 @@ from nbe.protocol import Proxy, NbeError, NbeTimeout, NbeRejected, SETTINGS_GROU
 LOG = logging.getLogger("nbe.gateway")
 
 HEARTBEAT_FILE = "/tmp/bridge-heartbeat"
+
+# Controller-supplied item names become MQTT topic segments and HA object
+# ids downstream. MQTT wildcards ('#', '+'), separators ('/'), and control
+# characters in a name would let whoever answers discovery (unauthenticated
+# in broadcast mode) inject topics or crash every publish, so anything
+# outside this conservative set is dropped at the trust boundary.
+_SAFE_NAME = re.compile(r"[A-Za-z0-9_]{1,48}")
 
 
 class NbeGateway:
@@ -117,6 +125,7 @@ class NbeGateway:
             serial=self._cfg["serial"],
             addr=self._cfg.get("addr"),
             port=int(self._cfg.get("port", 8483)),
+            allow_broadcast=bool(self._cfg.get("allow_broadcast", False)),
         )
         self._build_registry()
         self._online = True
@@ -146,6 +155,9 @@ class NbeGateway:
                 LOG.debug("group %s not answered; skipping", group)
                 continue
             for name, value in settings.items():
+                if not _SAFE_NAME.fullmatch(name):
+                    LOG.warning("skipping controller item with unsafe name %r", name)
+                    continue
                 item_id = "%s-%s" % (group, name)
                 meta = {"name": item_id, "group": group, "type": "R/W",
                         "longname": name.replace("_", " ")}
@@ -165,6 +177,9 @@ class NbeGateway:
                 LOG.debug("%s not answered; skipping", prefix)
                 continue
             for name, value in data.items():
+                if not _SAFE_NAME.fullmatch(name):
+                    LOG.warning("skipping controller item with unsafe name %r", name)
+                    continue
                 item_id = "%s-%s" % (prefix, name)
                 items[item_id] = {"name": item_id, "group": prefix, "type": "R",
                                   "longname": name.replace("_", " ")}

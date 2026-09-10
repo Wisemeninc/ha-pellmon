@@ -12,6 +12,7 @@ Licensed under the GNU General Public License v3 or later.
 
 from dataclasses import dataclass, field
 from typing import Optional
+import math
 import re
 import time
 
@@ -92,20 +93,36 @@ def _parse_decimals(raw) -> Optional[int]:
 
 
 def _parse_bound(raw) -> Optional[float]:
-    """Device metadata bounds arrive as strings; parse defensively."""
+    """Device metadata bounds arrive as strings; parse defensively.
+
+    Non-finite values (nan/inf) are treated as absent: bare float()
+    accepts 'nan'/'inf', and a NaN bound would win _tightest's max()/min()
+    (every comparison with NaN is False) and then void the operator's own
+    config bound — a fail-open on the last safety control.
+    """
     if raw is None:
         return None
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError):
         return None
+    return value if math.isfinite(value) else None
 
 
-def _normalize_number(value: float) -> str:
-    """HA number entities send '65.0'; controllers expect '65'."""
+def _normalize_number(value: float, raw: str) -> str:
+    """HA number entities send '65.0'; controllers expect '65'.
+
+    Never use repr(): it emits exponent notation ('5e-05') for small
+    magnitudes, a form the controller's parser could misread as a much
+    larger value that was never range-checked. `raw` has already matched
+    _NUMBER_RE (a plain decimal), so normalize that string directly.
+    """
     if value == int(value):
         return str(int(value))
-    return repr(value)
+    s = raw.lstrip("+")
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s
 
 
 class CommandValidator:
@@ -185,11 +202,32 @@ class CommandValidator:
                         )
                 lo = _tightest(_parse_bound(meta.get("min")), allowed.min, max)
                 hi = _tightest(_parse_bound(meta.get("max")), allowed.max, min)
+                # Fail closed on a numeric write unless BOTH bounds are
+                # usable (config or device): a one-sided bound still lets an
+                # arbitrary value through on the unguarded side, and hostile
+                # device metadata (max: "n/a") parses to exactly that.
+                if lo is None or hi is None:
+                    missing = (
+                        "min/max"
+                        if lo is None and hi is None
+                        else ("min" if lo is None else "max")
+                    )
+                    return Outcome(
+                        False,
+                        "numeric bounds incomplete (no usable %s) — set min/max "
+                        "for %r in the allowlist" % (missing, item),
+                    )
                 if lo is not None and number < lo:
                     return Outcome(False, "value %s below minimum %s" % (payload, lo))
                 if hi is not None and number > hi:
                     return Outcome(False, "value %s above maximum %s" % (payload, hi))
-                normalized = _normalize_number(number)
+                normalized = _normalize_number(number, payload)
+                # Defense in depth: the string actually sent to the furnace
+                # must itself be a plain decimal (never exponent notation).
+                if not _NUMBER_RE.fullmatch(normalized):
+                    return Outcome(
+                        False, "normalized value %r is not a plain decimal" % normalized
+                    )
 
         # No-op suppression: an equal value is acknowledged without touching
         # D-Bus and without spending rate budget. Buttons are exempt — a

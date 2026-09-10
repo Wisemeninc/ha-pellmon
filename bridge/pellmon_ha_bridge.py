@@ -35,6 +35,7 @@ the GNU General Public License for details.
 
 import json
 import logging
+import math
 import os
 import queue
 import ssl
@@ -83,7 +84,10 @@ def load_config(path):
     n = cfg.setdefault("nbe", {})
     n["serial"] = os.environ.get("NBE_SERIAL", n.get("serial"))
     n["password"] = _env_secret("NBE_PASSWORD", n.get("password"))
-    n["addr"] = os.environ.get("NBE_ADDR", n.get("addr"))  # None = discover
+    # An empty NBE_ADDR (blank line copied from .env.example) must mean
+    # "discover", not the dead-address "" that pins to INADDR_ANY.
+    n["addr"] = (os.environ.get("NBE_ADDR") or n.get("addr")) or None
+    n["allow_broadcast"] = _env_bool("NBE_ALLOW_BROADCAST", n.get("allow_broadcast", False))
     n["port"] = int(os.environ.get("NBE_PORT", n.get("port", 8483)))
     n["poll_interval_s"] = float(
         os.environ.get("POLL_INTERVAL", n.get("poll_interval_s", 10))
@@ -135,12 +139,15 @@ def build_allowlist(cfg):
         if options is not None and not isinstance(options, list):
             LOG.error("allowlist entry %r: options must be a list", name)
             sys.exit(2)
+        press = opts.get("press_payload")
         allowlist[name] = AllowedItem(
             name=name,
             min=lo,
             max=hi,
             options=options,
-            press_payload=opts.get("press_payload"),
+            # Coerce a YAML scalar (e.g. `press_payload: 1`) to str so the
+            # button is not permanently unpressable against a str payload.
+            press_payload=str(press) if press is not None else None,
             min_interval_s=interval,
         )
     return allowlist
@@ -161,6 +168,12 @@ class Bridge:
         )
         self.availability_topic = "%s/bridge/availability" % self.base
         self._announced = threading.Event()
+        # Debounce HA-triggered re-announces: a full announce is ~5 QoS-1
+        # publishes per item (hundreds of messages), so an HA client that
+        # loops `homeassistant/status`=online must not be amplified into a
+        # publish storm on the network thread.
+        self._announce_min_interval_s = 30.0
+        self._last_announce = 0.0
 
         # Commands run on a dedicated worker so a slow furnace write
         # (up to ~5 s) never blocks the paho network thread. Bounded
@@ -270,6 +283,9 @@ class Bridge:
         if msg.topic == "%s/status" % self.disc:
             payload = msg.payload.decode("utf-8", errors="replace").strip()
             if payload == "online" and self._announced.is_set():
+                if (time.monotonic() - self._last_announce) < self._announce_min_interval_s:
+                    LOG.info("HA status re-announce suppressed (debounce)")
+                    return
                 LOG.info("Home Assistant restarted; republishing discovery and state")
                 self._announce_all(self.gateway.items, self.gateway.values)
             return
@@ -352,6 +368,7 @@ class Bridge:
     # ---------------- discovery + state ----------------
 
     def _announce_all(self, items, values):
+        self._last_announce = time.monotonic()
         writable = []
         for name, meta in sorted(items.items()):
             self._announce_item(name, meta)
@@ -447,16 +464,25 @@ class Bridge:
         )
 
     def _publish(self, topic, payload, retain=False):
-        info = self.mq.publish(topic, payload, qos=1, retain=retain)
+        # Defense in depth behind the gateway's name sanitization: paho
+        # raises ValueError on a wildcard/invalid topic, and letting that
+        # unwind through the poll thread turns one bad item into a
+        # permanent reconnect loop. Degrade to losing one publish instead.
+        try:
+            info = self.mq.publish(topic, payload, qos=1, retain=retain)
+        except ValueError as exc:
+            LOG.error("refusing publish to invalid topic %r: %s", topic, exc)
+            return
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             LOG.warning("publish to %s failed: rc=%s", topic, info.rc)
 
 
 def _num(raw):
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError):
         return None
+    return value if math.isfinite(value) else None
 
 
 def _step(decimals):
@@ -476,6 +502,15 @@ def main():
 
     if not cfg["nbe"].get("serial") or not cfg["nbe"].get("password"):
         LOG.error("NBE_SERIAL and NBE_PASSWORD are required (furnace menu 18)")
+        sys.exit(1)
+    # Fail fast here rather than let Proxy.__init__ raise the same refusal
+    # inside the poll thread, where it degrades into an endless retry warning.
+    if not cfg["nbe"].get("addr") and not cfg["nbe"].get("allow_broadcast"):
+        LOG.error(
+            "Refusing broadcast discovery: set NBE_ADDR to pin the controller "
+            "address, or NBE_ALLOW_BROADCAST=true to accept the risk (writes "
+            "stay disabled in broadcast mode)."
+        )
         sys.exit(1)
     if not cfg["mqtt"].get("password") and not _env_bool("MQTT_ALLOW_ANONYMOUS", False):
         LOG.error(
