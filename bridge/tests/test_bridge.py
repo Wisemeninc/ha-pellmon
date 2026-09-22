@@ -189,6 +189,57 @@ class TestStartupConfigGuard(unittest.TestCase):
             self.assertIsNone(config_problem(self._cfg(username="", password="")))
 
 
+class _QueueFullResult:
+    rc = 15  # mqtt.MQTT_ERR_QUEUE_SIZE
+
+
+class QueueFullMQ(StubMQ):
+    """Reports a full outgoing queue for the first N publishes — what paho
+    does when the online announce burst outruns max_queued_messages."""
+
+    def __init__(self, full_for):
+        super().__init__()
+        self.full_for = full_for
+        self.attempts = 0
+
+    def publish(self, topic, payload, qos=1, retain=False):
+        self.attempts += 1
+        if self.attempts <= self.full_for:
+            return _QueueFullResult()
+        return super().publish(topic, payload, qos, retain)
+
+
+class TestPublishBackpressure(unittest.TestCase):
+    """Field finding: 349 items x ~6 publishes overflowed the 1000-message
+    queue and every later discovery config was dropped with rc=15. A full
+    queue must be waited out, not treated as a failed publish."""
+
+    def test_queue_full_is_retried_until_it_drains(self):
+        bridge = make_bridge()
+        bridge.mq = QueueFullMQ(full_for=3)
+        bridge._publish("pellmon/boiler-temp", "70", retain=True)
+        self.assertEqual(bridge.mq.attempts, 4)
+        self.assertEqual(bridge.mq.published, [("pellmon/boiler-temp", "70", True)])
+
+    def test_other_errors_are_not_retried(self):
+        bridge = make_bridge()
+
+        class OtherErr(StubMQ):
+            calls = 0
+
+            def publish(self, *a, **k):
+                self.calls += 1
+
+                class R:
+                    rc = 4  # MQTT_ERR_NO_CONN
+
+                return R()
+
+        bridge.mq = OtherErr()
+        bridge._publish("pellmon/boiler-temp", "70")
+        self.assertEqual(bridge.mq.calls, 1)
+
+
 class RaisingMQ(StubMQ):
     def publish(self, topic, payload, qos=1, retain=False):
         if "#" in topic or "+" in topic:

@@ -215,7 +215,11 @@ class Bridge:
                 cert_reqs=ssl.CERT_REQUIRED,
                 tls_version=ssl.PROTOCOL_TLS_CLIENT,
             )
-        self.mq.max_queued_messages_set(1000)  # bound memory during broker outages
+        # Bound memory during broker outages, but leave room for the online
+        # announce burst: ~6 QoS 1 publishes per item (discovery config,
+        # stale-component clears, state), i.e. thousands for a full-size
+        # controller. _publish applies backpressure when this fills.
+        self.mq.max_queued_messages_set(PUBLISH_QUEUE_MAX)
         self.mq.will_set(self.availability_topic, "offline", qos=1, retain=True)
         self.mq.on_connect = self._mqtt_connected
         self.mq.on_disconnect = self._mqtt_disconnected
@@ -483,13 +487,30 @@ class Bridge:
         # raises ValueError on a wildcard/invalid topic, and letting that
         # unwind through the poll thread turns one bad item into a
         # permanent reconnect loop. Degrade to losing one publish instead.
-        try:
-            info = self.mq.publish(topic, payload, qos=1, retain=retain)
-        except ValueError as exc:
-            LOG.error("refusing publish to invalid topic %r: %s", topic, exc)
-            return
-        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+        #
+        # Callers run on the gateway or command-worker thread, never on
+        # paho's network thread, so waiting here lets the network loop
+        # drain the queue: a full queue (MQTT_ERR_QUEUE_SIZE) is
+        # backpressure, not a reason to drop discovery configs.
+        deadline = time.monotonic() + PUBLISH_QUEUE_WAIT_S
+        while True:
+            try:
+                info = self.mq.publish(topic, payload, qos=1, retain=retain)
+            except ValueError as exc:
+                LOG.error("refusing publish to invalid topic %r: %s", topic, exc)
+                return
+            if info.rc == mqtt.MQTT_ERR_SUCCESS:
+                return
+            if info.rc == mqtt.MQTT_ERR_QUEUE_SIZE and time.monotonic() < deadline:
+                time.sleep(PUBLISH_QUEUE_POLL_S)
+                continue
             LOG.warning("publish to %s failed: rc=%s", topic, info.rc)
+            return
+
+
+PUBLISH_QUEUE_MAX = 5000      # paho outgoing queue bound (small messages)
+PUBLISH_QUEUE_WAIT_S = 30.0   # max backpressure wait per publish
+PUBLISH_QUEUE_POLL_S = 0.05
 
 
 def _num(raw):
